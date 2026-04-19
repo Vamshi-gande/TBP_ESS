@@ -1,0 +1,1202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SENTINEL — Surveillance Test Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:        #080b10;
+  --surface:   #0d1117;
+  --surface2:  #161b24;
+  --surface3:  #1c2333;
+  --border:    #21293a;
+  --border2:   #2d3748;
+  --accent:    #00e5ff;
+  --accent2:   #7b61ff;
+  --danger:    #ff4757;
+  --warn:      #ffa502;
+  --ok:        #2ed573;
+  --text:      #cdd9e5;
+  --muted:     #6b7c93;
+  --dim:       #3d4f63;
+  --mono:      'Space Mono', monospace;
+  --sans:      'DM Sans', sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; overflow: hidden; }
+
+/* ── Scanline overlay ── */
+body::before {
+  content: '';
+  position: fixed; inset: 0; pointer-events: none; z-index: 9999;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,.04) 2px, rgba(0,0,0,.04) 4px);
+}
+
+/* ── Layout ── */
+.shell { display: grid; grid-template-rows: 48px 1fr; height: 100vh; }
+
+/* ── Topbar ── */
+.topbar {
+  display: flex; align-items: center; gap: 0;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  padding: 0 16px;
+}
+.logo {
+  font-family: var(--mono); font-size: .78rem; font-weight: 700;
+  color: var(--accent); letter-spacing: .18em; margin-right: 24px;
+  display: flex; align-items: center; gap: 8px;
+}
+.logo-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+.tab-bar { display: flex; gap: 0; height: 100%; flex: 1; }
+.tab {
+  padding: 0 18px; height: 100%; display: flex; align-items: center; gap: 7px;
+  font-size: .78rem; font-weight: 500; color: var(--muted); cursor: pointer;
+  border-bottom: 2px solid transparent; transition: color .15s, border-color .15s;
+  letter-spacing: .02em; white-space: nowrap;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-icon { font-size: .9rem; }
+
+.conn-status {
+  margin-left: auto; display: flex; align-items: center; gap: 8px;
+  font-family: var(--mono); font-size: .68rem;
+}
+.status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dim); transition: background .3s; }
+.status-dot.online { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+.status-dot.error  { background: var(--danger); }
+#conn-label { color: var(--muted); }
+
+/* ── Main ── */
+.main { display: grid; grid-template-columns: 260px 1fr; overflow: hidden; }
+
+/* ── Left Panel ── */
+.left-panel {
+  background: var(--surface); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.panel-head {
+  padding: 14px 16px 10px; border-bottom: 1px solid var(--border);
+  font-family: var(--mono); font-size: .65rem; letter-spacing: .12em; color: var(--muted); text-transform: uppercase;
+}
+
+.field-group { padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.field-label { font-size: .7rem; color: var(--muted); margin-bottom: 5px; font-family: var(--mono); letter-spacing: .05em; }
+.field-row { display: flex; gap: 6px; }
+
+input[type=text], input[type=number], input[type=password], input[type=url], select {
+  background: var(--surface2); border: 1px solid var(--border2); border-radius: 5px;
+  color: var(--text); padding: 7px 10px; font-size: .8rem; font-family: var(--sans);
+  outline: none; width: 100%; transition: border-color .15s;
+}
+input:focus, select:focus { border-color: var(--accent); }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 7px 13px; border-radius: 5px; font-size: .78rem; font-weight: 600;
+  border: none; cursor: pointer; transition: opacity .15s, transform .1s;
+  font-family: var(--sans); white-space: nowrap; letter-spacing: .01em;
+}
+.btn:hover { opacity: .85; }
+.btn:active { transform: scale(.97); }
+.btn-accent  { background: var(--accent); color: #000; }
+.btn-violet  { background: var(--accent2); color: #fff; }
+.btn-danger  { background: var(--danger); color: #fff; }
+.btn-ghost   { background: var(--surface3); color: var(--text); border: 1px solid var(--border2); }
+.btn-ok      { background: #1a3d2b; color: var(--ok); border: 1px solid #2a6040; }
+.btn-sm      { padding: 5px 10px; font-size: .72rem; }
+.btn-block   { width: 100%; }
+.btn:disabled { opacity: .35; cursor: not-allowed; }
+
+/* Status badge */
+.sbadge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 8px; border-radius: 4px; font-size: .7rem; font-family: var(--mono);
+}
+.sbadge-ok     { background: #0d2b1e; color: var(--ok); border: 1px solid #1a4d32; }
+.sbadge-error  { background: #2b0d0d; color: var(--danger); border: 1px solid #4d1a1a; }
+.sbadge-warn   { background: #2b1e0d; color: var(--warn); border: 1px solid #4d3a1a; }
+.sbadge-info   { background: #0d1e2b; color: var(--accent); border: 1px solid #1a3a4d; }
+
+/* System status list */
+.sys-list { padding: 10px 14px; display: flex; flex-direction: column; gap: 7px; }
+.sys-row  { display: flex; align-items: center; justify-content: space-between; font-size: .75rem; }
+.sys-name { color: var(--muted); font-family: var(--mono); font-size: .7rem; }
+
+/* Source list */
+.source-list { flex: 1; overflow-y: auto; padding: 8px; }
+.src-card {
+  background: var(--surface2); border: 1px solid var(--border); border-radius: 7px;
+  padding: 10px 12px; margin-bottom: 6px; cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.src-card:hover, .src-card.active { border-color: var(--accent); background: var(--surface3); }
+.src-card .src-name { font-weight: 600; font-size: .82rem; }
+.src-card .src-meta { font-size: .7rem; color: var(--muted); margin-top: 3px; font-family: var(--mono); }
+.src-card .src-type { font-size: .65rem; color: var(--accent); background: #001f2b; padding: 1px 6px; border-radius: 3px; display: inline-block; margin-top: 4px; }
+
+/* ── Right: tab views ── */
+.right-panel { overflow: hidden; display: flex; flex-direction: column; }
+.tab-view { display: none; flex: 1; overflow: hidden; padding: 18px; }
+.tab-view.active { display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
+
+/* ── Video / Stream area ── */
+.stream-box {
+  background: #000; border: 1px solid var(--border); border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  min-height: 340px; position: relative; overflow: hidden; flex-shrink: 0;
+}
+.stream-box img { max-width: 100%; max-height: 420px; display: block; border-radius: 7px; }
+.stream-placeholder {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  color: var(--dim); font-family: var(--mono); font-size: .75rem;
+}
+.stream-placeholder .icon { font-size: 2.5rem; }
+.stream-badge {
+  position: absolute; top: 10px; left: 10px;
+  background: rgba(0,0,0,.75); border: 1px solid var(--danger);
+  color: var(--danger); font-family: var(--mono); font-size: .65rem;
+  padding: 3px 8px; border-radius: 4px; display: flex; align-items: center; gap: 5px;
+  backdrop-filter: blur(4px);
+}
+.live-blink { width: 5px; height: 5px; border-radius: 50%; background: var(--danger); animation: pulse 1s infinite; }
+.stream-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* ── Upload zone ── */
+.upload-zone {
+  border: 2px dashed var(--border2); border-radius: 10px;
+  padding: 32px; text-align: center; cursor: pointer;
+  transition: border-color .2s, background .2s;
+  background: var(--surface2);
+}
+.upload-zone:hover, .upload-zone.drag-over { border-color: var(--accent); background: #001620; }
+.upload-zone .up-icon { font-size: 2rem; margin-bottom: 8px; }
+.upload-zone p { color: var(--muted); font-size: .82rem; }
+.upload-zone strong { color: var(--text); }
+.upload-zone input { display: none; }
+
+/* ── Progress bar ── */
+.progress-wrap { background: var(--surface2); border-radius: 4px; height: 6px; overflow: hidden; }
+.progress-bar  { height: 100%; background: var(--accent); border-radius: 4px; transition: width .3s; width: 0%; }
+
+/* ── Card grid ── */
+.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.info-card {
+  background: var(--surface2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 14px 16px;
+}
+.info-card h4 { font-size: .72rem; font-family: var(--mono); color: var(--muted); letter-spacing: .1em; text-transform: uppercase; margin-bottom: 8px; }
+.info-card .val { font-size: 1.6rem; font-weight: 600; font-family: var(--mono); color: var(--accent); }
+.info-card .sub { font-size: .72rem; color: var(--muted); margin-top: 2px; }
+
+/* ── Alert feed ── */
+.alert-feed { display: flex; flex-direction: column; gap: 6px; max-height: 380px; overflow-y: auto; }
+.alert-item {
+  background: var(--surface2); border-left: 3px solid var(--dim);
+  border-radius: 0 7px 7px 0; padding: 10px 12px;
+  display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: start;
+  animation: slideIn .2s ease;
+}
+@keyframes slideIn { from { opacity:0; transform: translateX(-8px); } to { opacity:1; transform: none; } }
+.alert-item.high   { border-left-color: var(--danger); }
+.alert-item.medium { border-left-color: var(--warn); }
+.alert-item.low    { border-left-color: var(--ok); }
+.alert-score {
+  font-family: var(--mono); font-size: .7rem; font-weight: 700;
+  padding: 2px 7px; border-radius: 3px; white-space: nowrap;
+}
+.sc-high   { background: #2b0d0d; color: var(--danger); }
+.sc-medium { background: #2b1e0d; color: var(--warn); }
+.sc-low    { background: #0d2b1e; color: var(--ok); }
+.alert-body .title { font-weight: 600; font-size: .8rem; }
+.alert-body .detail { font-size: .72rem; color: var(--muted); margin-top: 2px; font-family: var(--mono); }
+.alert-ts { font-size: .65rem; color: var(--dim); font-family: var(--mono); }
+
+/* ── Face grid ── */
+.face-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
+.face-card {
+  background: var(--surface2); border: 1px solid var(--border); border-radius: 8px;
+  overflow: hidden; text-align: center;
+}
+.face-card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: var(--surface3); }
+.face-card .face-name { padding: 6px 8px; font-size: .75rem; font-weight: 600; }
+.face-card .face-del  { padding: 4px; background: var(--surface3); font-size: .68rem; color: var(--danger); cursor: pointer; border: none; width: 100%; }
+.face-card .face-del:hover { background: #2b0d0d; }
+
+/* ── Log console ── */
+.log-console {
+  background: #000; border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px; font-family: var(--mono); font-size: .72rem; color: #64ffda;
+  max-height: 260px; overflow-y: auto; flex-shrink: 0;
+}
+.log-line { margin-bottom: 3px; }
+.log-line .ts    { color: var(--dim); margin-right: 8px; }
+.log-line .ok    { color: var(--ok); }
+.log-line .err   { color: var(--danger); }
+.log-line .info  { color: var(--accent); }
+.log-line .warn  { color: var(--warn); }
+
+/* ── ROI canvas ── */
+#roi-wrap { position: relative; display: inline-block; }
+#roi-preview { display: block; max-width: 100%; border-radius: 8px; }
+#roi-canvas  { position: absolute; top: 0; left: 0; cursor: crosshair; }
+
+.zone-pills { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.zpill {
+  padding: 5px 12px; border-radius: 20px; font-size: .72rem; cursor: pointer;
+  border: 1px solid transparent; font-weight: 600; transition: all .15s;
+}
+.zpill.green    { background: #0d2b1a; color: #2ed573; border-color: #1a4d32; }
+.zpill.amber    { background: #2b1a0d; color: #ffa502; border-color: #4d3a1a; }
+.zpill.red      { background: #2b0d0d; color: #ff4757; border-color: #4d1a1a; }
+.zpill.critical { background: #1a0d2b; color: #a55eea; border-color: #3a1a4d; }
+.zpill.active   { box-shadow: 0 0 0 2px currentColor; }
+
+/* ── Divider ── */
+.divider { border: none; border-top: 1px solid var(--border); margin: 4px 0; }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+
+/* ── Toast ── */
+.toast-shelf { position: fixed; bottom: 20px; right: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 10000; }
+.toast-item {
+  background: var(--surface3); border: 1px solid var(--border2); border-radius: 8px;
+  padding: 10px 16px; font-size: .78rem; min-width: 220px;
+  display: flex; align-items: center; gap: 8px;
+  animation: toastIn .25s ease; box-shadow: 0 4px 20px rgba(0,0,0,.5);
+}
+@keyframes toastIn { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:none} }
+.toast-item.ok   { border-left: 3px solid var(--ok); }
+.toast-item.err  { border-left: 3px solid var(--danger); }
+.toast-item.info { border-left: 3px solid var(--accent); }
+
+/* row util */
+.row { display: flex; gap: 8px; align-items: center; }
+.row-between { display: flex; justify-content: space-between; align-items: center; }
+.mt4 { margin-top: 4px; }
+.mt8 { margin-top: 8px; }
+.section-title {
+  font-family: var(--mono); font-size: .65rem; letter-spacing: .12em;
+  color: var(--muted); text-transform: uppercase; margin-bottom: 8px;
+}
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+  <!-- ── Topbar ── -->
+  <div class="topbar">
+    <div class="logo"><div class="logo-dot"></div>SENTINEL</div>
+    <div class="tab-bar">
+      <div class="tab active" onclick="switchTab('connect')" id="tab-connect"><span class="tab-icon">⚡</span>Connect</div>
+      <div class="tab" onclick="switchTab('stream')"  id="tab-stream"><span class="tab-icon">📹</span>Live Stream</div>
+      <div class="tab" onclick="switchTab('upload')"  id="tab-upload"><span class="tab-icon">📤</span>Upload Video</div>
+      <div class="tab" onclick="switchTab('roi')"     id="tab-roi"><span class="tab-icon">🎯</span>ROI Zones</div>
+      <div class="tab" onclick="switchTab('faces')"   id="tab-faces"><span class="tab-icon">👤</span>Faces</div>
+      <div class="tab" onclick="switchTab('alerts')"  id="tab-alerts"><span class="tab-icon">🔔</span>Alerts <span id="alert-badge" style="display:none;background:var(--danger);color:#fff;border-radius:10px;padding:1px 6px;font-size:.65rem;margin-left:2px;">0</span></div>
+    </div>
+    <div class="conn-status">
+      <div class="status-dot" id="conn-dot"></div>
+      <span id="conn-label">not connected</span>
+    </div>
+  </div>
+
+  <!-- ── Main ── -->
+  <div class="main">
+
+    <!-- ── Left panel ── -->
+    <div class="left-panel">
+      <div class="panel-head">// SYSTEM CONFIG</div>
+
+      <div class="field-group">
+        <div class="field-label">API BASE URL</div>
+        <input id="api-url" type="url" value="http://localhost:8000" placeholder="http://localhost:8000">
+        <div class="field-label mt4">USERNAME</div>
+        <input id="login-user" value="admin">
+        <div class="field-label mt4">PASSWORD</div>
+        <input id="login-pass" type="password" value="admin123">
+        <button class="btn btn-accent btn-block mt8" onclick="doLogin()" id="login-btn">LOGIN & CONNECT</button>
+      </div>
+
+      <div class="sys-list" id="sys-checks">
+        <div class="sys-row"><span class="sys-name">API</span><span class="sbadge sbadge-warn" id="chk-api">—</span></div>
+        <div class="sys-row"><span class="sys-name">AUTH</span><span class="sbadge sbadge-warn" id="chk-auth">—</span></div>
+        <div class="sys-row"><span class="sys-name">WEBSOCKET</span><span class="sbadge sbadge-warn" id="chk-ws">—</span></div>
+        <div class="sys-row"><span class="sys-name">SOURCES</span><span class="sbadge sbadge-info" id="chk-sources">—</span></div>
+        <div class="sys-row"><span class="sys-name">FACES</span><span class="sbadge sbadge-info" id="chk-faces">—</span></div>
+      </div>
+
+      <hr class="divider">
+      <div class="panel-head" style="padding-top:10px">// ACTIVE SOURCES</div>
+      <div class="source-list" id="source-list">
+        <div style="padding:10px;font-size:.72rem;color:var(--dim);font-family:var(--mono)">Login to load sources</div>
+      </div>
+    </div>
+
+    <!-- ── Right panel ── -->
+    <div class="right-panel">
+
+      <!-- ── TAB: Connect ── -->
+      <div class="tab-view active" id="view-connect">
+        <div class="section-title">Add New Source</div>
+        <div class="card-grid">
+
+          <!-- IP Camera -->
+          <div class="info-card">
+            <h4>IP Camera / ESP32-CAM</h4>
+            <div class="field-label mt4">Source Name</div>
+            <input id="cam-name" placeholder="e.g. Front Door">
+            <div class="field-label mt4">Stream URL</div>
+            <input id="cam-url" placeholder="rtsp://... or http://...">
+            <div class="field-label mt4">Type</div>
+            <select id="cam-type">
+              <option value="ip_camera">IP Camera</option>
+              <option value="esp32">ESP32-CAM</option>
+              <option value="webcam">Webcam (index)</option>
+            </select>
+            <button class="btn btn-accent btn-block mt8" onclick="connectCamera()">⚡ Connect Camera</button>
+          </div>
+
+          <!-- System Status -->
+          <div class="info-card">
+            <h4>System Health</h4>
+            <div id="health-content" style="font-family:var(--mono);font-size:.72rem;color:var(--muted);margin-top:8px">
+              Login to check system health
+            </div>
+            <button class="btn btn-ghost btn-sm mt8" onclick="checkHealth()">↻ Refresh</button>
+          </div>
+
+        </div>
+
+        <!-- Log console -->
+        <div class="section-title">Activity Log</div>
+        <div class="log-console" id="log-console">
+          <div class="log-line"><span class="ts">00:00:00</span><span class="info">SENTINEL testing console initialized</span></div>
+        </div>
+      </div>
+
+      <!-- ── TAB: Stream ── -->
+      <div class="tab-view" id="view-stream">
+        <div class="stream-controls">
+          <div class="field-label" style="margin:0">Source ID:</div>
+          <input id="stream-src-id" type="number" value="1" style="width:70px">
+          <button class="btn btn-accent" onclick="startStream()">▶ Start Stream</button>
+          <button class="btn btn-danger" onclick="stopStream()">■ Stop</button>
+          <button class="btn btn-ghost" onclick="grabSnapshot()">📸 Snapshot</button>
+          <span id="stream-status" class="sbadge sbadge-warn">IDLE</span>
+        </div>
+
+        <div class="stream-box" id="stream-box">
+          <div class="stream-placeholder">
+            <div class="icon">📷</div>
+            <div>Select a source and press Start Stream</div>
+          </div>
+        </div>
+
+        <div class="section-title">Preview Frame (for ROI editor)</div>
+        <div class="row" style="gap:8px">
+          <input id="preview-src-id" type="number" value="1" style="width:70px">
+          <button class="btn btn-ghost" onclick="loadPreviewFrame()">Load Preview Frame</button>
+        </div>
+        <div id="preview-result" style="margin-top:8px"></div>
+      </div>
+
+      <!-- ── TAB: Upload ── -->
+      <div class="tab-view" id="view-upload">
+        <div class="section-title">Upload Test Video</div>
+
+        <div class="upload-zone" id="upload-zone" onclick="document.getElementById('video-file').click()">
+          <input type="file" id="video-file" accept=".mp4,.avi,.mkv,.mov" onchange="handleFileSelect(this.files[0])">
+          <div class="up-icon">🎬</div>
+          <p><strong>Click to select</strong> or drag & drop</p>
+          <p style="margin-top:4px">MP4, AVI, MKV, MOV supported</p>
+          <div id="selected-file" style="margin-top:10px;color:var(--accent);font-family:var(--mono);font-size:.75rem"></div>
+        </div>
+
+        <div class="row mt8" style="gap:10px">
+          <div style="flex:1">
+            <div class="field-label">Source Name</div>
+            <input id="video-name" placeholder="e.g. Test Recording 1">
+          </div>
+          <div style="align-self:flex-end">
+            <button class="btn btn-accent" id="upload-btn" onclick="uploadVideo()" disabled>📤 Upload & Activate</button>
+          </div>
+        </div>
+
+        <div id="upload-progress-wrap" style="display:none" class="mt8">
+          <div class="field-label">Uploading…</div>
+          <div class="progress-wrap"><div class="progress-bar" id="upload-progress"></div></div>
+        </div>
+
+        <div id="upload-result" class="mt8"></div>
+
+        <!-- Uploaded sources -->
+        <div class="section-title" style="margin-top:8px">Uploaded Sources</div>
+        <div id="upload-sources-list" style="font-size:.75rem;color:var(--muted)">None yet</div>
+      </div>
+
+      <!-- ── TAB: ROI ── -->
+      <div class="tab-view" id="view-roi">
+        <div class="row" style="gap:10px;flex-wrap:wrap">
+          <div>
+            <div class="field-label">Source ID</div>
+            <input id="roi-src-id" type="number" value="1" style="width:80px">
+          </div>
+          <div style="align-self:flex-end">
+            <button class="btn btn-ghost" onclick="loadROIFrame()">Load Frame</button>
+          </div>
+          <div style="align-self:flex-end">
+            <button class="btn btn-ghost" onclick="loadROIList()">↻ Refresh Zones</button>
+          </div>
+        </div>
+
+        <div class="zone-pills" id="zone-pills">
+          <div class="zpill green active" data-type="green" onclick="selectZone(this)">● Green</div>
+          <div class="zpill amber" data-type="amber" onclick="selectZone(this)">● Amber</div>
+          <div class="zpill red" data-type="red" onclick="selectZone(this)">● Red</div>
+          <div class="zpill critical" data-type="critical" onclick="selectZone(this)">● Critical</div>
+        </div>
+
+        <div class="row" style="gap:8px;flex-wrap:wrap">
+          <input id="roi-zone-name" placeholder="Zone name" style="flex:1;min-width:140px">
+          <button class="btn btn-accent" onclick="saveROI()">💾 Save Zone</button>
+          <button class="btn btn-ghost" onclick="clearROIDraw()">✕ Clear</button>
+        </div>
+
+        <div style="overflow:auto;border:1px solid var(--border);border-radius:8px;background:#000;position:relative">
+          <div id="roi-wrap">
+            <img id="roi-preview" src="" style="display:none;max-width:100%">
+            <canvas id="roi-canvas"></canvas>
+            <div id="roi-empty" style="padding:40px;text-align:center;font-family:var(--mono);font-size:.75rem;color:var(--dim)">
+              Load a frame to start drawing zones
+            </div>
+          </div>
+        </div>
+
+        <div class="section-title">Saved Zones</div>
+        <div id="roi-zone-list" style="display:flex;flex-direction:column;gap:6px"></div>
+      </div>
+
+      <!-- ── TAB: Faces ── -->
+      <div class="tab-view" id="view-faces">
+        <div class="section-title">Register Family Member</div>
+
+        <div class="row" style="gap:10px;flex-wrap:wrap;align-items:flex-end">
+          <div style="flex:1;min-width:140px">
+            <div class="field-label">Name</div>
+            <input id="face-name" placeholder="e.g. Dad">
+          </div>
+          <div style="flex:1;min-width:160px">
+            <div class="field-label">Photo (JPG/PNG, face visible)</div>
+            <input type="file" id="face-file" accept=".jpg,.jpeg,.png" style="font-size:.75rem;padding:5px">
+          </div>
+          <button class="btn btn-accent" onclick="registerFace()">➕ Register</button>
+        </div>
+
+        <div id="face-reg-result" class="mt8"></div>
+
+        <div class="section-title" style="margin-top:4px">Registered Faces</div>
+        <div class="face-grid" id="face-grid">
+          <div style="color:var(--muted);font-size:.75rem;grid-column:1/-1">No faces registered yet</div>
+        </div>
+      </div>
+
+      <!-- ── TAB: Alerts ── -->
+      <div class="tab-view" id="view-alerts">
+        <div class="card-grid" id="alert-stats">
+          <div class="info-card"><h4>Total Alerts</h4><div class="val" id="stat-total">—</div></div>
+          <div class="info-card"><h4>High Severity</h4><div class="val" id="stat-high" style="color:var(--danger)">—</div></div>
+          <div class="info-card"><h4>WS Connected</h4><div class="val" id="stat-ws" style="color:var(--ok)">—</div></div>
+        </div>
+
+        <div class="row-between">
+          <div class="section-title" style="margin:0">Live Alert Feed</div>
+          <div class="row" style="gap:6px">
+            <button class="btn btn-ghost btn-sm" onclick="fetchAlerts()">↻ Refresh</button>
+            <button class="btn btn-ghost btn-sm" onclick="clearAlertFeed()">Clear</button>
+          </div>
+        </div>
+
+        <div class="alert-feed" id="alert-feed">
+          <div style="color:var(--muted);font-size:.75rem;text-align:center;padding:20px">Connect to start receiving alerts</div>
+        </div>
+      </div>
+
+    </div><!-- /right-panel -->
+  </div><!-- /main -->
+</div><!-- /shell -->
+
+<div class="toast-shelf" id="toast-shelf"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════
+let TOKEN = "";
+let ws = null;
+let selectedFile = null;
+let roiDrawing = false, roiSX = 0, roiSY = 0, roiCX = 0, roiCY = 0;
+let roiPending = null;
+let roiSelectedType = "green";
+let roiZones = [];
+let alertCount = 0;
+let highAlertCount = 0;
+let wsConnected = false;
+
+const ZONE_COLORS = { green:"#2ed573", amber:"#ffa502", red:"#ff4757", critical:"#a55eea" };
+
+function api() { return document.getElementById("api-url").value.replace(/\/$/, ""); }
+function headers(json=false) {
+  const h = { "Authorization": `Bearer ${TOKEN}` };
+  if (json) h["Content-Type"] = "application/json";
+  return h;
+}
+
+// ═══════════════════════════════════════════════════════
+// TABS
+// ═══════════════════════════════════════════════════════
+function switchTab(name) {
+  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+  document.querySelectorAll(".tab-view").forEach(v => v.classList.remove("active"));
+  document.getElementById("tab-" + name).classList.add("active");
+  document.getElementById("view-" + name).classList.add("active");
+  if (name === "alerts") { loadAlertTab(); }
+  if (name === "faces")  { loadFaces(); }
+  if (name === "upload") { loadUploadSources(); }
+}
+
+// ═══════════════════════════════════════════════════════
+// LOG
+// ═══════════════════════════════════════════════════════
+function log(msg, type="info") {
+  const el = document.getElementById("log-console");
+  const ts = new Date().toTimeString().slice(0,8);
+  const line = document.createElement("div");
+  line.className = "log-line";
+  line.innerHTML = `<span class="ts">${ts}</span><span class="${type}">${msg}</span>`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+
+// ═══════════════════════════════════════════════════════
+// TOAST
+// ═══════════════════════════════════════════════════════
+function toast(msg, type="info") {
+  const shelf = document.getElementById("toast-shelf");
+  const el = document.createElement("div");
+  el.className = `toast-item ${type}`;
+  el.textContent = msg;
+  shelf.appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+// ═══════════════════════════════════════════════════════
+// AUTH + CONNECT
+// ═══════════════════════════════════════════════════════
+async function doLogin() {
+  const btn = document.getElementById("login-btn");
+  btn.disabled = true; btn.textContent = "Connecting…";
+
+  // 1. Health check
+  try {
+    const r = await fetch(`${api()}/health`);
+    const d = await r.json();
+    setCheck("chk-api", "ONLINE", "ok");
+    log("API reachable — version " + d.version, "ok");
+  } catch(e) {
+    setCheck("chk-api", "OFFLINE", "error");
+    log("Cannot reach API: " + e.message, "err");
+    btn.disabled = false; btn.textContent = "LOGIN & CONNECT";
+    toast("Cannot reach API", "err"); return;
+  }
+
+  // 2. Auth
+  try {
+    const r = await fetch(`${api()}/auth/login`, {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ username: document.getElementById("login-user").value,
+                             password: document.getElementById("login-pass").value })
+    });
+    if (!r.ok) throw new Error(await r.text());
+    TOKEN = (await r.json()).access_token;
+    setCheck("chk-auth", "OK", "ok");
+    log("Authenticated as " + document.getElementById("login-user").value, "ok");
+    setConnStatus(true);
+  } catch(e) {
+    setCheck("chk-auth", "FAILED", "error");
+    log("Auth failed: " + e.message, "err");
+    toast("Login failed", "err");
+    btn.disabled = false; btn.textContent = "LOGIN & CONNECT";
+    return;
+  }
+
+  // 3. WebSocket
+  connectWS();
+
+  // 4. Load sources + stats
+  await loadSources();
+  checkHealth();
+
+  btn.disabled = false; btn.textContent = "RECONNECT";
+  toast("Connected to SENTINEL", "ok");
+}
+
+function setCheck(id, label, type) {
+  const el = document.getElementById(id);
+  el.textContent = label;
+  el.className = `sbadge sbadge-${type}`;
+}
+
+function setConnStatus(on) {
+  document.getElementById("conn-dot").className = "status-dot " + (on ? "online" : "");
+  document.getElementById("conn-label").textContent = on ? "connected" : "not connected";
+}
+
+// ═══════════════════════════════════════════════════════
+// WEBSOCKET
+// ═══════════════════════════════════════════════════════
+function connectWS() {
+  const wsUrl = api().replace("http","ws") + "/ws/alerts?token=" + TOKEN;
+  try {
+    ws = new WebSocket(wsUrl);
+    ws.onopen = () => {
+      wsConnected = true;
+      setCheck("chk-ws", "LIVE", "ok");
+      document.getElementById("stat-ws").textContent = "YES";
+      log("WebSocket connected", "ok");
+    };
+    ws.onclose = () => {
+      wsConnected = false;
+      setCheck("chk-ws", "CLOSED", "warn");
+      document.getElementById("stat-ws").textContent = "NO";
+    };
+    ws.onerror = () => {
+      setCheck("chk-ws", "ERROR", "error");
+      log("WebSocket error", "err");
+    };
+    ws.onmessage = (e) => {
+      const data = JSON.parse(e.data);
+      if (data.event === "alert") handleLiveAlert(data);
+    };
+    setInterval(() => { if (ws && ws.readyState === 1) ws.send("ping"); }, 20000);
+  } catch(e) {
+    setCheck("chk-ws", "FAILED", "error");
+    log("WS failed: " + e.message, "err");
+  }
+}
+
+function handleLiveAlert(data) {
+  alertCount++;
+  const score = data.suspicion_score || 0;
+  if (score >= 3) highAlertCount++;
+
+  // Badge on tab
+  const badge = document.getElementById("alert-badge");
+  badge.textContent = alertCount;
+  badge.style.display = "inline";
+
+  document.getElementById("stat-total").textContent = alertCount;
+  document.getElementById("stat-high").textContent = highAlertCount;
+
+  prependAlert(data);
+  if (score >= 2) toast(`⚠ ${data.alert_type} — Score ${score}`, score >= 3 ? "err" : "info");
+  log(`ALERT [${score}] ${data.alert_type} on source ${data.source_id}`, score >= 3 ? "err" : "warn");
+}
+
+// ═══════════════════════════════════════════════════════
+// HEALTH
+// ═══════════════════════════════════════════════════════
+async function checkHealth() {
+  if (!TOKEN) return;
+  try {
+    const [srcR, faceR] = await Promise.all([
+      fetch(`${api()}/sources`, { headers: headers() }),
+      fetch(`${api()}/face/list`, { headers: headers() }),
+    ]);
+    const srcs = srcR.ok ? await srcR.json() : [];
+    const faces = faceR.ok ? await faceR.json() : [];
+    setCheck("chk-sources", srcs.length + " active", srcs.length ? "ok" : "info");
+    setCheck("chk-faces", faces.length + " known", faces.length ? "ok" : "info");
+
+    document.getElementById("health-content").innerHTML = `
+      <div style="margin-bottom:6px;color:var(--ok)">✓ API healthy</div>
+      <div>Sources: <strong style="color:var(--accent)">${srcs.length}</strong></div>
+      <div>Known faces: <strong style="color:var(--accent)">${faces.length}</strong></div>
+      <div>WebSocket: <strong style="color:${wsConnected?'var(--ok)':'var(--danger)'}">${wsConnected?'connected':'offline'}</strong></div>
+    `;
+  } catch(e) {
+    log("Health check error: " + e.message, "err");
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// SOURCES
+// ═══════════════════════════════════════════════════════
+async function loadSources() {
+  if (!TOKEN) return;
+  try {
+    const r = await fetch(`${api()}/sources`, { headers: headers() });
+    if (!r.ok) return;
+    const srcs = await r.json();
+    const el = document.getElementById("source-list");
+    if (!srcs.length) {
+      el.innerHTML = '<div style="padding:10px;font-size:.72rem;color:var(--dim);font-family:var(--mono)">No sources yet</div>';
+      return;
+    }
+    el.innerHTML = srcs.map(s => `
+      <div class="src-card" onclick="selectSource(${s.id})">
+        <div class="src-name">${s.name}</div>
+        <div class="src-meta">#${s.id} · ${s.uri.slice(0,28)}${s.uri.length>28?'…':''}</div>
+        <div class="src-type">${s.source_type}</div>
+      </div>
+    `).join("");
+  } catch(e) { log("Load sources error: " + e.message, "err"); }
+}
+
+function selectSource(id) {
+  document.getElementById("stream-src-id").value = id;
+  document.getElementById("preview-src-id").value = id;
+  document.getElementById("roi-src-id").value = id;
+  switchTab("stream");
+  toast("Source " + id + " selected", "info");
+}
+
+// ═══════════════════════════════════════════════════════
+// CONNECT CAMERA
+// ═══════════════════════════════════════════════════════
+async function connectCamera() {
+  const name = document.getElementById("cam-name").value.trim();
+  const uri  = document.getElementById("cam-url").value.trim();
+  const type = document.getElementById("cam-type").value;
+  if (!name || !uri) { toast("Enter name and URL", "err"); return; }
+  if (!TOKEN) { toast("Login first", "err"); return; }
+  try {
+    const r = await fetch(`${api()}/camera/connect`, {
+      method: "POST", headers: headers(true),
+      body: JSON.stringify({ name, uri, source_type: type })
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const src = await r.json();
+    log(`Camera connected: ${src.name} (id=${src.id})`, "ok");
+    toast("Camera connected — ID " + src.id, "ok");
+    loadSources();
+  } catch(e) {
+    log("Connect camera failed: " + e.message, "err");
+    toast("Connect failed: " + e.message, "err");
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// STREAM
+// ═══════════════════════════════════════════════════════
+let streamActive = false;
+
+function startStream() {
+  const sid = document.getElementById("stream-src-id").value;
+  if (!sid) { toast("Enter a source ID", "err"); return; }
+  const url = `${api()}/stream/live/${sid}`;
+  const box = document.getElementById("stream-box");
+
+  box.innerHTML = `
+    <div class="stream-badge"><div class="live-blink"></div>LIVE · SRC ${sid}</div>
+    <img src="${url}" alt="stream" onerror="streamError()" style="max-width:100%;max-height:420px;border-radius:7px">
+  `;
+  document.getElementById("stream-status").textContent = "LIVE";
+  document.getElementById("stream-status").className = "sbadge sbadge-ok";
+  streamActive = true;
+  log("Stream started for source " + sid, "ok");
+}
+
+function stopStream() {
+  const box = document.getElementById("stream-box");
+  box.innerHTML = `<div class="stream-placeholder"><div class="icon">📷</div><div>Stream stopped</div></div>`;
+  document.getElementById("stream-status").textContent = "STOPPED";
+  document.getElementById("stream-status").className = "sbadge sbadge-warn";
+  streamActive = false;
+}
+
+function streamError() {
+  document.getElementById("stream-status").textContent = "ERROR";
+  document.getElementById("stream-status").className = "sbadge sbadge-error";
+  log("Stream error — check source is active", "err");
+  toast("Stream failed — is the source active?", "err");
+}
+
+async function grabSnapshot() {
+  const sid = document.getElementById("stream-src-id").value;
+  if (!sid || !TOKEN) return;
+  const url = `${api()}/source/frame-preview/${sid}`;
+  const a = document.createElement("a");
+  a.href = url; a.download = `snapshot_src${sid}.jpg`; a.click();
+  toast("Snapshot downloaded", "ok");
+}
+
+async function loadPreviewFrame() {
+  const sid = document.getElementById("preview-src-id").value;
+  if (!sid) return;
+  const url = `${api()}/source/frame-preview/${sid}?_=${Date.now()}`;
+  document.getElementById("preview-result").innerHTML =
+    `<img src="${url}" style="max-width:100%;border-radius:8px;border:1px solid var(--border)" onerror="this.replaceWith(document.createTextNode('Failed to load preview'))">`;
+}
+
+// ═══════════════════════════════════════════════════════
+// VIDEO UPLOAD
+// ═══════════════════════════════════════════════════════
+function handleFileSelect(file) {
+  if (!file) return;
+  selectedFile = file;
+  document.getElementById("selected-file").textContent = `📁 ${file.name}  (${(file.size/1024/1024).toFixed(1)} MB)`;
+  document.getElementById("upload-btn").disabled = false;
+  if (!document.getElementById("video-name").value)
+    document.getElementById("video-name").value = file.name.replace(/\.[^.]+$/, "");
+}
+
+const uz = document.getElementById("upload-zone");
+uz.addEventListener("dragover", e => { e.preventDefault(); uz.classList.add("drag-over"); });
+uz.addEventListener("dragleave", () => uz.classList.remove("drag-over"));
+uz.addEventListener("drop", e => {
+  e.preventDefault(); uz.classList.remove("drag-over");
+  const f = e.dataTransfer.files[0];
+  if (f) { document.getElementById("video-file").files; handleFileSelect(f); }
+});
+
+async function uploadVideo() {
+  if (!selectedFile) { toast("Select a file first", "err"); return; }
+  if (!TOKEN) { toast("Login first", "err"); return; }
+  const name = document.getElementById("video-name").value.trim() || selectedFile.name;
+
+  const fd = new FormData();
+  fd.append("file", selectedFile);
+  fd.append("name", name);
+
+  document.getElementById("upload-progress-wrap").style.display = "block";
+  document.getElementById("upload-btn").disabled = true;
+
+  // Simulate progress (XHR for real progress)
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", `${api()}/video/upload`);
+  xhr.setRequestHeader("Authorization", `Bearer ${TOKEN}`);
+
+  xhr.upload.onprogress = (e) => {
+    if (e.lengthComputable) {
+      const pct = Math.round(e.loaded / e.total * 100);
+      document.getElementById("upload-progress").style.width = pct + "%";
+    }
+  };
+
+  xhr.onload = () => {
+    document.getElementById("upload-progress-wrap").style.display = "none";
+    document.getElementById("upload-btn").disabled = false;
+
+    if (xhr.status >= 200 && xhr.status < 300) {
+      const src = JSON.parse(xhr.responseText);
+      document.getElementById("upload-result").innerHTML =
+        `<div class="sbadge sbadge-ok" style="display:inline-flex">✓ Uploaded — Source ID: ${src.id}</div>`;
+      log(`Video uploaded: "${src.name}" (id=${src.id})`, "ok");
+      toast("Video uploaded — Source ID " + src.id, "ok");
+      selectedFile = null;
+      document.getElementById("selected-file").textContent = "";
+      loadSources();
+      loadUploadSources();
+    } else {
+      document.getElementById("upload-result").innerHTML =
+        `<div class="sbadge sbadge-error">Upload failed: ${xhr.responseText}</div>`;
+      toast("Upload failed", "err");
+      log("Upload error: " + xhr.responseText, "err");
+    }
+  };
+  xhr.onerror = () => { toast("Upload error", "err"); };
+  xhr.send(fd);
+}
+
+async function loadUploadSources() {
+  if (!TOKEN) return;
+  try {
+    const r = await fetch(`${api()}/sources`, { headers: headers() });
+    if (!r.ok) return;
+    const srcs = (await r.json()).filter(s => s.source_type === "upload");
+    const el = document.getElementById("upload-sources-list");
+    if (!srcs.length) { el.innerHTML = '<span style="color:var(--muted)">No uploads yet</span>'; return; }
+    el.innerHTML = srcs.map(s => `
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;margin-bottom:6px">
+        <span style="font-family:var(--mono);color:var(--accent);font-size:.7rem">#${s.id}</span>
+        <span style="flex:1;font-size:.8rem">${s.name}</span>
+        <button class="btn btn-ghost btn-sm" onclick="selectSource(${s.id})">▶ View Stream</button>
+      </div>
+    `).join("");
+  } catch(e) {}
+}
+
+// ═══════════════════════════════════════════════════════
+// ROI
+// ═══════════════════════════════════════════════════════
+const roiCanvas = document.getElementById("roi-canvas");
+const roiCtx = roiCanvas.getContext("2d");
+const roiImg = document.getElementById("roi-preview");
+
+async function loadROIFrame() {
+  const sid = document.getElementById("roi-src-id").value;
+  const url = `${api()}/source/frame-preview/${sid}?_=${Date.now()}`;
+  roiImg.onload = () => {
+    roiCanvas.width  = roiImg.naturalWidth || 640;
+    roiCanvas.height = roiImg.naturalHeight || 480;
+    roiImg.style.display = "block";
+    document.getElementById("roi-empty").style.display = "none";
+    loadROIList(); redrawROI();
+  };
+  roiImg.onerror = () => toast("Cannot load frame — is source active?", "err");
+  roiImg.src = url;
+}
+
+async function loadROIList() {
+  const sid = document.getElementById("roi-src-id").value;
+  if (!TOKEN || !sid) return;
+  try {
+    const r = await fetch(`${api()}/roi/list/${sid}`, { headers: headers() });
+    if (!r.ok) return;
+    roiZones = await r.json();
+    renderROIZoneList();
+    redrawROI();
+  } catch(e) {}
+}
+
+function renderROIZoneList() {
+  const el = document.getElementById("roi-zone-list");
+  if (!roiZones.length) { el.innerHTML = '<span style="color:var(--muted);font-size:.75rem">No zones yet</span>'; return; }
+  el.innerHTML = roiZones.map(z => `
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);border-left:3px solid ${ZONE_COLORS[z.zone_type]||'#888'};border-radius:0 6px 6px 0">
+      <span style="font-weight:600;font-size:.8rem;flex:1">${z.name}</span>
+      <span style="font-size:.7rem;color:var(--muted);font-family:var(--mono)">${z.zone_type} · ${z.x},${z.y} ${z.width}×${z.height}</span>
+      <button class="btn btn-danger btn-sm" onclick="deleteROI(${z.id})">✕</button>
+    </div>
+  `).join("");
+}
+
+roiCanvas.addEventListener("mousedown", e => {
+  const r = roiCanvas.getBoundingClientRect();
+  roiSX = e.clientX - r.left; roiSY = e.clientY - r.top;
+  roiDrawing = true; roiPending = null;
+});
+roiCanvas.addEventListener("mousemove", e => {
+  if (!roiDrawing) return;
+  const r = roiCanvas.getBoundingClientRect();
+  roiCX = e.clientX - r.left; roiCY = e.clientY - r.top;
+  redrawROI();
+});
+roiCanvas.addEventListener("mouseup", e => {
+  if (!roiDrawing) return;
+  roiDrawing = false;
+  const r = roiCanvas.getBoundingClientRect();
+  roiCX = e.clientX - r.left; roiCY = e.clientY - r.top;
+  const w = roiCX - roiSX, h = roiCY - roiSY;
+  if (Math.abs(w) > 10 && Math.abs(h) > 10) {
+    roiPending = { x: Math.round(Math.min(roiSX,roiCX)), y: Math.round(Math.min(roiSY,roiCY)),
+                   width: Math.round(Math.abs(w)), height: Math.round(Math.abs(h)) };
+  }
+  redrawROI();
+});
+
+function redrawROI() {
+  roiCtx.clearRect(0, 0, roiCanvas.width, roiCanvas.height);
+  roiZones.forEach(z => {
+    const c = ZONE_COLORS[z.zone_type] || "#888";
+    roiCtx.strokeStyle = c; roiCtx.lineWidth = 2;
+    roiCtx.strokeRect(z.x, z.y, z.width, z.height);
+    roiCtx.fillStyle = c + "22"; roiCtx.fillRect(z.x, z.y, z.width, z.height);
+    roiCtx.fillStyle = c; roiCtx.font = "bold 12px 'DM Sans', sans-serif";
+    roiCtx.fillText(z.name, z.x + 4, z.y + 16);
+  });
+  if (roiDrawing) {
+    roiCtx.strokeStyle = ZONE_COLORS[roiSelectedType]; roiCtx.lineWidth = 2;
+    roiCtx.setLineDash([6,3]);
+    roiCtx.strokeRect(roiSX, roiSY, roiCX - roiSX, roiCY - roiSY);
+    roiCtx.setLineDash([]);
+  }
+  if (roiPending && !roiDrawing) {
+    const c = ZONE_COLORS[roiSelectedType];
+    roiCtx.strokeStyle = c; roiCtx.lineWidth = 2; roiCtx.setLineDash([6,3]);
+    roiCtx.strokeRect(roiPending.x, roiPending.y, roiPending.width, roiPending.height);
+    roiCtx.fillStyle = c + "33"; roiCtx.fillRect(roiPending.x, roiPending.y, roiPending.width, roiPending.height);
+    roiCtx.setLineDash([]);
+  }
+}
+
+function clearROIDraw() { roiPending = null; redrawROI(); }
+
+function selectZone(el) {
+  document.querySelectorAll(".zpill").forEach(p => p.classList.remove("active"));
+  el.classList.add("active");
+  roiSelectedType = el.dataset.type;
+}
+
+async function saveROI() {
+  if (!roiPending) { toast("Draw a zone first", "err"); return; }
+  const name = document.getElementById("roi-zone-name").value.trim();
+  if (!name) { toast("Enter a zone name", "err"); return; }
+  const sid = parseInt(document.getElementById("roi-src-id").value);
+  if (!TOKEN) { toast("Login first", "err"); return; }
+  try {
+    const r = await fetch(`${api()}/roi/save`, {
+      method: "POST", headers: headers(true),
+      body: JSON.stringify({ source_id: sid, name, zone_type: roiSelectedType, ...roiPending })
+    });
+    if (!r.ok) throw new Error(await r.text());
+    roiPending = null;
+    document.getElementById("roi-zone-name").value = "";
+    toast("Zone saved ✓", "ok");
+    log(`ROI zone "${name}" saved (${roiSelectedType})`, "ok");
+    loadROIList();
+  } catch(e) {
+    toast("Save failed: " + e.message, "err");
+  }
+}
+
+async function deleteROI(id) {
+  if (!TOKEN) return;
+  await fetch(`${api()}/roi/${id}`, { method: "DELETE", headers: headers() });
+  toast("Zone deleted", "ok");
+  loadROIList();
+}
+
+// ═══════════════════════════════════════════════════════
+// FACES
+// ═══════════════════════════════════════════════════════
+async function registerFace() {
+  const name = document.getElementById("face-name").value.trim();
+  const file = document.getElementById("face-file").files[0];
+  if (!name || !file) { toast("Enter a name and select a photo", "err"); return; }
+  if (!TOKEN) { toast("Login first", "err"); return; }
+
+  const fd = new FormData();
+  fd.append("name", name); fd.append("image", file);
+
+  document.getElementById("face-reg-result").innerHTML = '<span style="color:var(--muted);font-size:.75rem">Registering…</span>';
+
+  try {
+    const r = await fetch(`${api()}/face/register`, {
+      method: "POST", headers: { "Authorization": `Bearer ${TOKEN}` }, body: fd
+    });
+    if (!r.ok) {
+      const msg = await r.text();
+      document.getElementById("face-reg-result").innerHTML = `<span class="sbadge sbadge-error">${msg}</span>`;
+      toast("Registration failed", "err"); return;
+    }
+    const face = await r.json();
+    document.getElementById("face-reg-result").innerHTML = `<span class="sbadge sbadge-ok">✓ ${face.name} registered</span>`;
+    document.getElementById("face-name").value = "";
+    document.getElementById("face-file").value = "";
+    log(`Face registered: ${face.name} (id=${face.id})`, "ok");
+    toast(`${face.name} registered ✓`, "ok");
+    loadFaces();
+  } catch(e) {
+    toast("Error: " + e.message, "err");
+  }
+}
+
+async function loadFaces() {
+  if (!TOKEN) return;
+  try {
+    const r = await fetch(`${api()}/face/list`, { headers: headers() });
+    if (!r.ok) return;
+    const faces = await r.json();
+    const el = document.getElementById("face-grid");
+    if (!faces.length) {
+      el.innerHTML = '<div style="color:var(--muted);font-size:.75rem;grid-column:1/-1">No faces registered yet</div>';
+      return;
+    }
+    el.innerHTML = faces.map(f => `
+      <div class="face-card">
+        <img src="${api()}/storage/faces/${f.image_path.split('/').pop()}"
+             onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 80 80%22><rect width=%2280%22 height=%2280%22 fill=%22%231c2333%22/><text x=%2240%22 y=%2248%22 font-size=%2230%22 text-anchor=%22middle%22>👤</text></svg>'"
+             alt="${f.name}">
+        <div class="face-name">${f.name}</div>
+        <button class="face-del" onclick="deleteFace(${f.id},'${f.name}')">Remove</button>
+      </div>
+    `).join("");
+  } catch(e) {}
+}
+
+async function deleteFace(id, name) {
+  if (!TOKEN) return;
+  await fetch(`${api()}/face/${id}`, { method: "DELETE", headers: headers() });
+  toast(`${name} removed`, "ok");
+  loadFaces();
+}
+
+// ═══════════════════════════════════════════════════════
+// ALERTS
+// ═══════════════════════════════════════════════════════
+async function loadAlertTab() {
+  document.getElementById("stat-ws").textContent = wsConnected ? "YES" : "NO";
+  fetchAlerts();
+}
+
+async function fetchAlerts() {
+  if (!TOKEN) return;
+  try {
+    const r = await fetch(`${api()}/alerts?limit=50`, { headers: headers() });
+    if (!r.ok) return;
+    const alerts = await r.json();
+    alertCount = alerts.length;
+    highAlertCount = alerts.filter(a => a.suspicion_score >= 3).length;
+    document.getElementById("stat-total").textContent = alertCount;
+    document.getElementById("stat-high").textContent = highAlertCount;
+
+    const feed = document.getElementById("alert-feed");
+    if (!alerts.length) {
+      feed.innerHTML = '<div style="color:var(--muted);font-size:.75rem;text-align:center;padding:20px">No alerts yet</div>';
+      return;
+    }
+    feed.innerHTML = alerts.map(a => alertHTML(a)).join("");
+  } catch(e) {}
+}
+
+function scoreClass(s) { return s >= 3 ? "high" : s === 2 ? "medium" : "low"; }
+function scoreBadgeClass(s) { return s >= 3 ? "sc-high" : s === 2 ? "sc-medium" : "sc-low"; }
+
+function alertHTML(a) {
+  const sc = a.suspicion_score;
+  let meta = "";
+  try { const m = JSON.parse(a.meta || "{}"); meta = [m.is_unknown?"unknown":"known", m.loitering?"loitering":"", m.in_danger_zone?"danger zone":""].filter(Boolean).join(" · "); } catch(e) {}
+  return `
+    <div class="alert-item ${scoreClass(sc)}">
+      <span class="alert-score ${scoreBadgeClass(sc)}">${sc}</span>
+      <div class="alert-body">
+        <div class="title">${a.alert_type.toUpperCase()} — Source ${a.source_id ?? '?'}</div>
+        <div class="detail">${meta || 'no detail'}</div>
+      </div>
+      <span class="alert-ts">${a.created_at ? a.created_at.slice(11,19) : ''}</span>
+    </div>
+  `;
+}
+
+function prependAlert(data) {
+  const feed = document.getElementById("alert-feed");
+  const empty = feed.querySelector("[style*='No alerts']");
+  if (empty) empty.remove();
+  const div = document.createElement("div");
+  div.innerHTML = alertHTML({
+    suspicion_score: data.suspicion_score, alert_type: data.alert_type,
+    source_id: data.source_id, meta: null, created_at: data.timestamp
+  });
+  feed.prepend(div.firstElementChild);
+}
+
+function clearAlertFeed() {
+  document.getElementById("alert-feed").innerHTML =
+    '<div style="color:var(--muted);font-size:.75rem;text-align:center;padding:20px">Feed cleared</div>';
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Alert Monitor – Surveillance</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', sans-serif; background: #0f0f13; color: #e2e8f0; padding: 24px; }
+  h1 { color: #a78bfa; margin-bottom: 20px; font-size: 1.2rem; }
+  .controls { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+  input { background: #1e1e2e; border: 1px solid #2d2d44; border-radius: 6px; color: #e2e8f0; padding: 8px 12px; font-size: .85rem; }
+  button { padding: 8px 16px; border-radius: 6px; font-size: .82rem; border: none; cursor: pointer; font-weight: 500; }
+  .btn-green  { background: #15803d; color: #fff; }
+  .btn-red    { background: #dc2626; color: #fff; }
+  .btn-ghost  { background: #1e1e2e; color: #94a3b8; border: 1px solid #2d2d44; }
+  .status { padding: 8px 14px; border-radius: 6px; font-size: .8rem; font-weight: 600; }
+  .connected    { background: #14532d33; color: #4ade80; border: 1px solid #14532d; }
+  .disconnected { background: #7f1d1d33; color: #f87171; border: 1px solid #7f1d1d; }
+
+  #log { max-height: 70vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+  .alert-card { background: #1e1e2e; border-left: 4px solid #7c3aed; border-radius: 0 8px 8px 0;
+                padding: 12px 16px; font-size: .82rem; }
+  .alert-card.high     { border-color: #dc2626; }
+  .alert-card.medium   { border-color: #f59e0b; }
+  .alert-card.low      { border-color: #22c55e; }
+  .alert-card .row1 { display: flex; gap: 12px; align-items: center; margin-bottom: 6px; }
+  .score-badge { padding: 2px 8px; border-radius: 4px; font-weight: 700; font-size: .75rem; }
+  .sc-high   { background: #dc262633; color: #f87171; }
+  .sc-medium { background: #f59e0b33; color: #fbbf24; }
+  .sc-low    { background: #22c55e33; color: #4ade80; }
+  .meta { color: #64748b; font-size: .75rem; margin-top: 4px; word-break: break-all; }
+  .ts   { color: #475569; font-size: .72rem; }
+  .empty { color: #475569; text-align: center; margin-top: 40px; font-size: .85rem; }
+</style>
+</head>
+<body>
+<h1>📡 Live Alert Monitor</h1>
+
+<div class="controls">
+  <input id="ws-url" value="ws://localhost:8000/ws/alerts" style="width:300px">
+  <input id="ws-token" placeholder="JWT token (optional)" style="width:240px">
+  <button class="btn-green" onclick="connect()">Connect</button>
+  <button class="btn-red" onclick="disconnect()">Disconnect</button>
+  <button class="btn-ghost" onclick="clearLog()">Clear</button>
+  <span class="status disconnected" id="status">Disconnected</span>
+</div>
+
+<div id="log"><div class="empty">No alerts yet — connect to start monitoring</div></div>
+
+<script>
+let ws = null;
+
+function connect() {
+  let url = document.getElementById("ws-url").value.trim();
+  const tok = document.getElementById("ws-token").value.trim();
+  if (tok) url += `?token=${encodeURIComponent(tok)}`;
+
+  ws = new WebSocket(url);
+  ws.onopen = () => setStatus(true);
+  ws.onclose = () => setStatus(false);
+  ws.onerror = () => setStatus(false);
+  ws.onmessage = e => addAlert(JSON.parse(e.data));
+
+  // Ping every 20s
+  setInterval(() => { if (ws && ws.readyState === 1) ws.send("ping"); }, 20000);
+}
+
+function disconnect() { if (ws) ws.close(); }
+
+function setStatus(on) {
+  const el = document.getElementById("status");
+  el.className = "status " + (on ? "connected" : "disconnected");
+  el.textContent = on ? "Connected" : "Disconnected";
+}
+
+function scoreClass(s) { return s >= 3 ? "high" : s === 2 ? "medium" : "low"; }
+function badgeClass(s)  { return s >= 3 ? "sc-high" : s === 2 ? "sc-medium" : "sc-low"; }
+
+function addAlert(data) {
+  const log = document.getElementById("log");
+  const empty = log.querySelector(".empty");
+  if (empty) empty.remove();
+
+  const sc = data.suspicion_score || 0;
+  const card = document.createElement("div");
+  card.className = `alert-card ${scoreClass(sc)}`;
+  card.innerHTML = `
+    <div class="row1">
+      <span class="score-badge ${badgeClass(sc)}">SCORE ${sc}</span>
+      <strong>${(data.alert_type || "alert").toUpperCase()}</strong>
+      <span class="ts">${data.timestamp || new Date().toISOString()}</span>
+    </div>
+    <div>${data.message || ""}</div>
+    <div class="meta">source_id=${data.source_id}  alert_id=${data.alert_id}</div>
+    ${data.snapshot_path ? `<div class="meta">📸 ${data.snapshot_path}</div>` : ""}
+  `;
+  log.prepend(card);
+}
+
+function clearLog() {
+  document.getElementById("log").innerHTML = '<div class="empty">Log cleared</div>';
+}
+</script>
+</body>
+</html>

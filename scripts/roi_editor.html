@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Surveillance – ROI Visual Editor</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', sans-serif; background: #0f0f13; color: #e2e8f0; min-height: 100vh; }
+
+  header { background: #1a1a2e; padding: 14px 24px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid #2d2d44; }
+  header h1 { font-size: 1.1rem; font-weight: 600; color: #a78bfa; letter-spacing: 0.02em; }
+  .badge { background: #7c3aed22; color: #a78bfa; border: 1px solid #7c3aed55; border-radius: 4px; padding: 2px 8px; font-size: 0.72rem; }
+
+  .layout { display: grid; grid-template-columns: 300px 1fr; height: calc(100vh - 53px); }
+
+  /* Sidebar */
+  .sidebar { background: #13131f; border-right: 1px solid #2d2d44; display: flex; flex-direction: column; overflow: hidden; }
+  .sidebar-section { padding: 16px; border-bottom: 1px solid #2d2d44; }
+  .sidebar-section h2 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b; margin-bottom: 12px; }
+
+  label { display: block; font-size: 0.8rem; color: #94a3b8; margin-bottom: 4px; }
+  input, select { width: 100%; background: #1e1e2e; border: 1px solid #2d2d44; border-radius: 6px; color: #e2e8f0;
+                  padding: 7px 10px; font-size: 0.85rem; outline: none; margin-bottom: 10px; }
+  input:focus, select:focus { border-color: #7c3aed; }
+
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 6px; font-size: 0.82rem;
+         border: none; cursor: pointer; transition: opacity .15s; font-weight: 500; }
+  .btn:hover { opacity: .85; }
+  .btn-primary { background: #7c3aed; color: #fff; }
+  .btn-danger  { background: #dc2626; color: #fff; }
+  .btn-ghost   { background: #1e1e2e; color: #94a3b8; border: 1px solid #2d2d44; }
+  .btn-sm      { padding: 5px 10px; font-size: 0.78rem; }
+  .btn-block   { width: 100%; justify-content: center; }
+
+  .zone-type-row { display: grid; grid-template-columns: repeat(4,1fr); gap: 6px; margin-bottom: 10px; }
+  .zone-pill { padding: 5px 4px; border-radius: 5px; font-size: 0.7rem; text-align: center; cursor: pointer;
+               border: 2px solid transparent; transition: border-color .15s; font-weight: 600; user-select: none; }
+  .zone-pill.green   { background: #14532d33; color: #4ade80; }
+  .zone-pill.amber   { background: #78350f33; color: #fbbf24; }
+  .zone-pill.red     { background: #7f1d1d33; color: #f87171; }
+  .zone-pill.critical{ background: #4c1d9533; color: #c084fc; }
+  .zone-pill.selected{ border-color: currentColor; }
+
+  /* ROI list */
+  .roi-list { flex: 1; overflow-y: auto; padding: 12px; }
+  .roi-item { background: #1e1e2e; border: 1px solid #2d2d44; border-radius: 8px; padding: 10px 12px;
+              margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+  .roi-dot  { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .roi-item .info { flex: 1; min-width: 0; }
+  .roi-item .roi-name { font-size: 0.83rem; font-weight: 600; }
+  .roi-item .roi-coords { font-size: 0.7rem; color: #64748b; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* Canvas area */
+  .canvas-area { display: flex; flex-direction: column; align-items: center; justify-content: center;
+                 background: #0a0a10; position: relative; overflow: hidden; }
+  #canvas-wrap { position: relative; }
+  #preview-img { display: block; max-width: 100%; max-height: calc(100vh - 120px); }
+  #roi-canvas  { position: absolute; top: 0; left: 0; cursor: crosshair; }
+
+  .toolbar { position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+             display: flex; gap: 8px; background: #13131fcc; backdrop-filter: blur(8px);
+             border: 1px solid #2d2d44; border-radius: 8px; padding: 8px 12px; }
+
+  .hint { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
+          font-size: 0.72rem; color: #475569; background: #13131fcc; padding: 5px 12px;
+          border-radius: 20px; pointer-events: none; white-space: nowrap; }
+
+  .toast { position: fixed; bottom: 24px; right: 24px; background: #1e1e2e; border: 1px solid #2d2d44;
+           border-radius: 8px; padding: 12px 18px; font-size: 0.82rem; color: #a78bfa;
+           opacity: 0; transition: opacity .3s; pointer-events: none; z-index: 999; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🎥 Surveillance — ROI Visual Editor</h1>
+  <span class="badge">Testing Interface</span>
+</header>
+
+<div class="layout">
+  <!-- Sidebar -->
+  <div class="sidebar">
+
+    <!-- Auth -->
+    <div class="sidebar-section">
+      <h2>Authentication</h2>
+      <label>Username</label>
+      <input id="usr" value="admin">
+      <label>Password</label>
+      <input id="pwd" type="password" value="admin123">
+      <button class="btn btn-primary btn-block" onclick="doLogin()">Login</button>
+      <div id="auth-status" style="font-size:.75rem;margin-top:8px;color:#64748b;"></div>
+    </div>
+
+    <!-- Source -->
+    <div class="sidebar-section">
+      <h2>Source</h2>
+      <label>Source ID</label>
+      <input id="source-id" type="number" value="1" min="1">
+      <button class="btn btn-ghost btn-block" onclick="loadPreview()">Load Preview Frame</button>
+    </div>
+
+    <!-- New ROI -->
+    <div class="sidebar-section">
+      <h2>New Zone</h2>
+      <label>Zone Name</label>
+      <input id="roi-name" placeholder="e.g. Front Door">
+      <label>Zone Type</label>
+      <div class="zone-type-row">
+        <div class="zone-pill green selected" data-type="green" onclick="selectType(this)">Green</div>
+        <div class="zone-pill amber" data-type="amber" onclick="selectType(this)">Amber</div>
+        <div class="zone-pill red" data-type="red" onclick="selectType(this)">Red</div>
+        <div class="zone-pill critical" data-type="critical" onclick="selectType(this)">Critical</div>
+      </div>
+      <button class="btn btn-primary btn-block" onclick="saveROI()">💾 Save ROI</button>
+      <button class="btn btn-ghost btn-block" style="margin-top:6px" onclick="clearDraw()">✕ Clear Drawing</button>
+    </div>
+
+    <!-- ROI List -->
+    <div class="roi-list" id="roi-list">
+      <div style="font-size:.75rem;color:#475569;text-align:center;margin-top:20px">Load a source to see zones</div>
+    </div>
+  </div>
+
+  <!-- Canvas -->
+  <div class="canvas-area">
+    <div class="toolbar">
+      <button class="btn btn-ghost btn-sm" onclick="loadROIs()">↻ Refresh Zones</button>
+      <button class="btn btn-ghost btn-sm" onclick="toggleOverlay()">👁 Toggle Overlay</button>
+    </div>
+
+    <div id="canvas-wrap">
+      <img id="preview-img" src="" alt="" style="display:none">
+      <canvas id="roi-canvas"></canvas>
+    </div>
+
+    <div class="hint" id="hint">Login and load a source preview to begin drawing ROIs</div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const BASE = "";  // same origin
+let token = "";
+let rois = [];
+let drawing = false;
+let startX = 0, startY = 0, curX = 0, curY = 0;
+let pendingRect = null;
+let selectedType = "green";
+let overlayVisible = true;
+
+const img = document.getElementById("preview-img");
+const canvas = document.getElementById("roi-canvas");
+const ctx = canvas.getContext("2d");
+
+const ZONE_COLORS = { green:"#4ade80", amber:"#fbbf24", red:"#f87171", critical:"#c084fc" };
+
+// ── Auth ────────────────────────────────────────────────────────────────
+async function doLogin() {
+  const r = await fetch(`${BASE}/auth/login`, {
+    method: "POST", headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ username: document.getElementById("usr").value,
+                           password: document.getElementById("pwd").value })
+  });
+  if (!r.ok) { showToast("Login failed"); return; }
+  const d = await r.json();
+  token = d.access_token;
+  document.getElementById("auth-status").textContent = "✓ Authenticated";
+  showToast("Logged in successfully");
+}
+
+function authHeaders() { return { "Authorization": `Bearer ${token}` }; }
+
+// ── Preview frame ───────────────────────────────────────────────────────
+async function loadPreview() {
+  const sid = document.getElementById("source-id").value;
+  const url = `${BASE}/source/frame-preview/${sid}?_=${Date.now()}`;
+  img.onload = () => {
+    canvas.width  = img.naturalWidth  || img.offsetWidth;
+    canvas.height = img.naturalHeight || img.offsetHeight;
+    img.style.display = "block";
+    document.getElementById("hint").textContent = "Draw a rectangle on the frame to define an ROI";
+    loadROIs();
+    redraw();
+  };
+  img.src = url;
+  img.style.display = "block";
+}
+
+// ── ROI fetch & render ──────────────────────────────────────────────────
+async function loadROIs() {
+  const sid = document.getElementById("source-id").value;
+  const r = await fetch(`${BASE}/roi/list/${sid}`, { headers: authHeaders() });
+  if (!r.ok) return;
+  rois = await r.json();
+  renderROIList();
+  redraw();
+}
+
+function renderROIList() {
+  const el = document.getElementById("roi-list");
+  if (!rois.length) { el.innerHTML = '<div style="font-size:.75rem;color:#475569;text-align:center;margin-top:16px">No zones yet</div>'; return; }
+  el.innerHTML = rois.map(roi => `
+    <div class="roi-item">
+      <div class="roi-dot" style="background:${ZONE_COLORS[roi.zone_type] || '#888'}"></div>
+      <div class="info">
+        <div class="roi-name">${roi.name}</div>
+        <div class="roi-coords">${roi.zone_type} | ${roi.x},${roi.y} ${roi.width}×${roi.height}</div>
+      </div>
+      <button class="btn btn-danger btn-sm" onclick="deleteROI(${roi.id})">✕</button>
+    </div>
+  `).join("");
+}
+
+// ── Canvas drawing ──────────────────────────────────────────────────────
+canvas.addEventListener("mousedown", e => {
+  const r = canvas.getBoundingClientRect();
+  startX = e.clientX - r.left;
+  startY = e.clientY - r.top;
+  drawing = true;
+  pendingRect = null;
+});
+
+canvas.addEventListener("mousemove", e => {
+  if (!drawing) return;
+  const r = canvas.getBoundingClientRect();
+  curX = e.clientX - r.left;
+  curY = e.clientY - r.top;
+  redraw();
+});
+
+canvas.addEventListener("mouseup", e => {
+  if (!drawing) return;
+  drawing = false;
+  const r = canvas.getBoundingClientRect();
+  curX = e.clientX - r.left;
+  curY = e.clientY - r.top;
+  const w = curX - startX, h = curY - startY;
+  if (Math.abs(w) > 10 && Math.abs(h) > 10) {
+    pendingRect = {
+      x: Math.round(Math.min(startX, curX)),
+      y: Math.round(Math.min(startY, curY)),
+      width: Math.round(Math.abs(w)),
+      height: Math.round(Math.abs(h))
+    };
+    document.getElementById("hint").textContent = `ROI drawn: ${pendingRect.width}×${pendingRect.height} – name it and save`;
+  }
+  redraw();
+});
+
+function redraw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (overlayVisible) {
+    // Saved zones
+    rois.forEach(roi => {
+      const c = ZONE_COLORS[roi.zone_type] || "#888";
+      ctx.strokeStyle = c;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(roi.x, roi.y, roi.width, roi.height);
+      ctx.fillStyle = c + "22";
+      ctx.fillRect(roi.x, roi.y, roi.width, roi.height);
+      ctx.fillStyle = c;
+      ctx.font = "bold 12px sans-serif";
+      ctx.fillText(roi.name, roi.x + 4, roi.y + 14);
+    });
+  }
+
+  // Drawing in progress
+  if (drawing) {
+    const w = curX - startX, h = curY - startY;
+    ctx.strokeStyle = ZONE_COLORS[selectedType];
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 3]);
+    ctx.strokeRect(startX, startY, w, h);
+    ctx.setLineDash([]);
+  }
+
+  // Pending (finished draw, unsaved)
+  if (pendingRect && !drawing) {
+    const c = ZONE_COLORS[selectedType];
+    ctx.strokeStyle = c;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 3]);
+    ctx.strokeRect(pendingRect.x, pendingRect.y, pendingRect.width, pendingRect.height);
+    ctx.fillStyle = c + "33";
+    ctx.fillRect(pendingRect.x, pendingRect.y, pendingRect.width, pendingRect.height);
+    ctx.setLineDash([]);
+  }
+}
+
+function clearDraw() { pendingRect = null; redraw(); }
+function toggleOverlay() { overlayVisible = !overlayVisible; redraw(); }
+
+// ── Save ROI ────────────────────────────────────────────────────────────
+async function saveROI() {
+  if (!pendingRect) { showToast("Draw a zone on the frame first"); return; }
+  const name = document.getElementById("roi-name").value.trim();
+  if (!name) { showToast("Enter a zone name"); return; }
+  const sid = parseInt(document.getElementById("source-id").value);
+
+  const payload = { source_id: sid, name, zone_type: selectedType, ...pendingRect };
+  const r = await fetch(`${BASE}/roi/save`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(payload)
+  });
+  if (!r.ok) { showToast("Save failed: " + (await r.text())); return; }
+  pendingRect = null;
+  document.getElementById("roi-name").value = "";
+  showToast("Zone saved ✓");
+  loadROIs();
+}
+
+async function deleteROI(id) {
+  const r = await fetch(`${BASE}/roi/${id}`, { method: "DELETE", headers: authHeaders() });
+  if (r.ok) { showToast("Zone deleted"); loadROIs(); }
+}
+
+// ── Zone type selection ─────────────────────────────────────────────────
+function selectType(el) {
+  document.querySelectorAll(".zone-pill").forEach(p => p.classList.remove("selected"));
+  el.classList.add("selected");
+  selectedType = el.dataset.type;
+  redraw();
+}
+
+// ── Toast ───────────────────────────────────────────────────────────────
+function showToast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 2800);
+}
+</script>
+</body>
+</html>
