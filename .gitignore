@@ -2,4 +2,12 @@
 __pycache__/
 *.pyc
 *.db
+*.sqlite3
 .venv/
+venv/
+surveillance.db
+snapshots/
+storage/
+uploads/
+*.log
+yolov8n.pt
