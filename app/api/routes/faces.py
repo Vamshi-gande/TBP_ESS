@@ -7,7 +7,7 @@ DELETE /face/{id}
 import shutil
 from pathlib import Path
 
-import aiosqlite
+import asyncpg
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from app.api.deps import get_current_user
@@ -24,7 +24,7 @@ settings = get_settings()
 async def register_face(
     name: str = Form(...),
     image: UploadFile = File(...),
-    db: aiosqlite.Connection = Depends(get_db),
+    conn: asyncpg.Connection = Depends(get_db),
     _user=Depends(get_current_user),
 ):
     if not image.filename.lower().endswith((".jpg", ".jpeg", ".png")):
@@ -36,55 +36,48 @@ async def register_face(
         shutil.copyfileobj(image.file, f)
 
     # Insert row first to get ID
-    async with db.execute(
-        "INSERT INTO known_faces (name, image_path) VALUES (?,?)",
-        (name, str(dest)),
-    ) as cur:
-        face_id = cur.lastrowid
-    await db.commit()
+    face_id = await conn.fetchval(
+        "INSERT INTO known_faces (name, image_path) VALUES ($1,$2) RETURNING id",
+        name, str(dest),
+    )
 
     # Compute embedding
     blob = face_engine.register_face(face_id, name, str(dest))
     if blob is None:
         # Remove DB row and file if no face found
-        await db.execute("DELETE FROM known_faces WHERE id=?", (face_id,))
-        await db.commit()
+        await conn.execute("DELETE FROM known_faces WHERE id=$1", face_id)
         dest.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail="No face detected in the uploaded image")
 
     # Store embedding blob
-    await db.execute(
-        "UPDATE known_faces SET embedding=? WHERE id=?", (blob, face_id)
+    await conn.execute(
+        "UPDATE known_faces SET embedding=$1 WHERE id=$2", blob, face_id
     )
-    await db.commit()
 
-    async with db.execute("SELECT * FROM known_faces WHERE id=?", (face_id,)) as cur:
-        row = dict(await cur.fetchone())
-    return FaceOut(id=row["id"], name=row["name"], image_path=row["image_path"], created_at=row["created_at"])
+    row = await conn.fetchrow("SELECT * FROM known_faces WHERE id=$1", face_id)
+    return FaceOut(id=row["id"], name=row["name"], image_path=row["image_path"], created_at=str(row["created_at"]))
 
 
 @router.get("/list", response_model=list[FaceOut])
 async def list_faces(
-    db: aiosqlite.Connection = Depends(get_db),
+    conn: asyncpg.Connection = Depends(get_db),
     _user=Depends(get_current_user),
 ):
-    async with db.execute(
+    rows = await conn.fetch(
         "SELECT id, name, image_path, created_at FROM known_faces ORDER BY id DESC"
-    ) as cur:
-        rows = await cur.fetchall()
-    return [FaceOut(**dict(r)) for r in rows]
+    )
+    return [FaceOut(id=r["id"], name=r["name"], image_path=r["image_path"], created_at=str(r["created_at"])) for r in rows]
 
 
 @router.delete("/{face_id}", status_code=204)
 async def delete_face(
     face_id: int,
-    db: aiosqlite.Connection = Depends(get_db),
+    conn: asyncpg.Connection = Depends(get_db),
     _user=Depends(get_current_user),
 ):
-    async with db.execute(
-        "SELECT image_path FROM known_faces WHERE id=?", (face_id,)
-    ) as cur:
-        row = await cur.fetchone()
+    row = await conn.fetchrow(
+        "SELECT image_path FROM known_faces WHERE id=$1", face_id
+    )
     if not row:
         raise HTTPException(status_code=404, detail="Face not found")
 
@@ -94,5 +87,4 @@ async def delete_face(
     # Remove from in-memory registry
     face_engine.remove_face(face_id)
 
-    await db.execute("DELETE FROM known_faces WHERE id=?", (face_id,))
-    await db.commit()
+    await conn.execute("DELETE FROM known_faces WHERE id=$1", face_id)

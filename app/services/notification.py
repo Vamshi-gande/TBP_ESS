@@ -50,7 +50,7 @@ async def dispatch_alert(
 
 async def _send_twilio(message: str, media_url: Optional[str] = None) -> None:
     """Non-blocking Twilio send executed in thread pool."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, _send_twilio_sync, message, media_url)
 
 

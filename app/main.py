@@ -7,13 +7,12 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-import aiosqlite
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import get_settings
-from app.db.database import init_db
+from app.db.database import init_pool, close_pool, init_db, get_pool
 from app.services import face_engine, loitering_engine, surveillance_orchestrator
 
 settings = get_settings()
@@ -38,39 +37,40 @@ async def lifespan(app: FastAPI):
     ]:
         d.mkdir(parents=True, exist_ok=True)
 
-    # Init database
+    # Init PostgreSQL pool + schema
+    await init_pool()
     await init_db()
 
-    # Share event loop with orchestrator
-    loop = asyncio.get_event_loop()
+    # Share event loop with orchestrator (use get_running_loop, not deprecated get_event_loop)
+    loop = asyncio.get_running_loop()
     surveillance_orchestrator.set_event_loop(loop)
 
     # Load known faces into memory
-    async with aiosqlite.connect("surveillance.db") as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
             "SELECT id, name, embedding FROM known_faces"
-        ) as cur:
-            rows = [dict(r) for r in await cur.fetchall()]
-    face_engine.load_known_faces_from_db(rows)
+        )
+    face_engine.load_known_faces_from_db(
+        [dict(r) for r in rows]
+    )
 
     # Load loitering threshold from settings
-    async with aiosqlite.connect("surveillance.db") as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
             "SELECT value FROM settings WHERE key='loitering_threshold'"
-        ) as cur:
-            row = await cur.fetchone()
+        )
     if row:
         loitering_engine.update_threshold(int(row["value"]))
 
+    # Start loitering cleanup timer
+    loitering_engine.start_cleanup_timer()
+
     # Re-activate sources that were active before restart
-    async with aiosqlite.connect("surveillance.db") as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT id, uri FROM sources WHERE is_active=1"
-        ) as cur:
-            sources = [dict(r) for r in await cur.fetchall()]
+    async with pool.acquire() as conn:
+        sources = await conn.fetch(
+            "SELECT id, uri FROM sources WHERE is_active=TRUE"
+        )
 
     from app.services import camera_gateway
     for src in sources:
@@ -83,9 +83,14 @@ async def lifespan(app: FastAPI):
 
     # ── Shutdown ─────────────────────────────────────────────────────────
     logger.info("Shutting down…")
+    loitering_engine.stop_cleanup_timer()
+
     from app.services import camera_gateway as cg
-    for sid in list(cg._streams.keys()):
+    for sid in list(cg.list_active().keys()):
         cg.disconnect_source(sid)
+
+    surveillance_orchestrator.shutdown_all()
+    await close_pool()
 
 
 # ── App factory ───────────────────────────────────────────────────────────

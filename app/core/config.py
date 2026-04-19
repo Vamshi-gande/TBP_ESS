@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     APP_PORT: int = 8000
     DEBUG: bool = False
 
+    # Database
+    DATABASE_URL: str = "postgresql://sentinel:sentinel_secret@localhost:5434/surveillance"
+
     # Twilio
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""

@@ -3,8 +3,8 @@ app/api/routes/settings_route.py
 POST /settings/update
 GET  /settings
 """
-import aiosqlite
-from fastapi import APIRouter, Depends
+import asyncpg
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.deps import get_current_user
 from app.db.database import get_db
@@ -24,36 +24,32 @@ _ALLOWED_KEYS = {
 
 @router.get("", response_model=list[SettingOut])
 async def get_settings_all(
-    db: aiosqlite.Connection = Depends(get_db),
+    conn: asyncpg.Connection = Depends(get_db),
     _user=Depends(get_current_user),
 ):
-    async with db.execute("SELECT * FROM settings ORDER BY key") as cur:
-        rows = await cur.fetchall()
-    return [SettingOut(key=r["key"], value=r["value"], updated_at=r["updated_at"]) for r in rows]
+    rows = await conn.fetch("SELECT * FROM settings ORDER BY key")
+    return [SettingOut(key=r["key"], value=r["value"], updated_at=str(r["updated_at"])) for r in rows]
 
 
 @router.post("/update", response_model=SettingOut)
 async def update_setting(
     payload: SettingUpdate,
-    db: aiosqlite.Connection = Depends(get_db),
+    conn: asyncpg.Connection = Depends(get_db),
     _user=Depends(get_current_user),
 ):
-    from fastapi import HTTPException
     if payload.key not in _ALLOWED_KEYS:
         raise HTTPException(status_code=400, detail=f"Unknown setting key: {payload.key}")
 
-    await db.execute(
+    await conn.execute(
         """INSERT INTO settings (key, value, updated_at)
-           VALUES (?, ?, datetime('now'))
-           ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at""",
-        (payload.key, payload.value),
+           VALUES ($1, $2, NOW())
+           ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value, updated_at=EXCLUDED.updated_at""",
+        payload.key, payload.value,
     )
-    await db.commit()
 
     # Apply live
     if payload.key == "loitering_threshold":
         loitering_engine.update_threshold(int(payload.value))
 
-    async with db.execute("SELECT * FROM settings WHERE key=?", (payload.key,)) as cur:
-        row = dict(await cur.fetchone())
-    return SettingOut(**row)
+    row = await conn.fetchrow("SELECT * FROM settings WHERE key=$1", payload.key)
+    return SettingOut(key=row["key"], value=row["value"], updated_at=str(row["updated_at"]))

@@ -1,43 +1,66 @@
-# 🎥 Smart Surveillance Backend
+# 🎥 Enhanced Home Surveillance System (ESS)
 
-Production-ready FastAPI backend for an AI-powered home surveillance system.
+AI-powered, privacy-preserving home surveillance system using ESP32-CAM modules for capture and a local/cloud server for intelligent processing.
+
+**Team:** Vamshi, Sitanand & Akshith | **Guide:** Dr. Jeetender Reddy | **Institution:** Vasavi College of Engineering
 
 ---
 
 ## Tech Stack
 
-| Layer | Library |
+| Layer | Technology |
 |---|---|
-| API framework | FastAPI + Uvicorn |
-| AI detection | Ultralytics YOLOv8 Nano |
-| Face recognition | face_recognition (dlib) |
-| Video capture | OpenCV |
-| Database | SQLite via aiosqlite |
-| Realtime push | WebSocket |
+| Camera Hardware | ESP32-CAM (OV2640, MJPEG over Wi-Fi) |
+| API Framework | FastAPI + Uvicorn |
+| AI Detection | YOLOv8 Nano (~3.2M params) |
+| Motion Detection | MOG2 Background Subtraction (OpenCV) |
+| Face Recognition | InsightFace (ArcFace 512-d embeddings via ONNX Runtime) |
+| Behavior Analysis | CSRT Tracking + Lucas-Kanade Optical Flow |
+| Video Capture | OpenCV |
+| Database | PostgreSQL 16 (via Docker) + asyncpg |
+| Realtime Push | WebSocket |
 | Notifications | Twilio WhatsApp / SMS |
 | Auth | JWT (python-jose) + bcrypt |
+| Frontend | React Native (Expo) — runs in browser for debugging |
+| Containerisation | Docker + Docker Compose |
+
+---
+
+## Three-Signal Scoring System
+
+| Signal | Condition | Points |
+|---|---|---|
+| **TIME** | Detection during night hours (20:00–06:00) | +1 |
+| **BEHAVIOR** | Loitering detected (dwell > threshold) | +1 |
+| **FREQUENCY** | Unknown / novel face | +1 |
+
+**Score 0** → silent log  
+**Score 1** → snapshot saved to disk  
+**Score 2** → WebSocket alert + WhatsApp snapshot  
+**Score 3** → WhatsApp video + buzzer + app alert  
 
 ---
 
 ## Project Structure
 
 ```
-surveillance/
+TBP_ESS/
 ├── app/
 │   ├── main.py                          # App factory + lifespan hooks
 │   ├── core/
-│   │   ├── config.py                    # Settings (env vars)
+│   │   ├── config.py                    # Settings (env vars + DATABASE_URL)
 │   │   └── security.py                 # JWT + bcrypt
 │   ├── db/
-│   │   └── database.py                 # SQLite init + get_db dependency
+│   │   └── database.py                 # PostgreSQL pool (asyncpg) + schema init
 │   ├── models/
 │   │   └── schemas.py                  # All Pydantic schemas
 │   ├── services/
 │   │   ├── camera_gateway.py           # Camera/stream management
 │   │   ├── ai_pipeline.py              # YOLOv8 detection workers
-│   │   ├── face_engine.py              # Face registration + matching
-│   │   ├── loitering_engine.py         # Dwell-time tracker
-│   │   ├── scoring.py                  # Suspicion score calculator
+│   │   ├── motion_detector.py          # MOG2 background subtraction
+│   │   ├── face_engine.py              # InsightFace registration + matching
+│   │   ├── loitering_engine.py         # Dwell-time tracker + cleanup timer
+│   │   ├── scoring.py                  # Three-Signal suspicion score
 │   │   ├── notification.py             # WebSocket + Twilio dispatch
 │   │   ├── websocket_manager.py        # WS connection pool
 │   │   └── surveillance_orchestrator.py # Ties all services together
@@ -51,15 +74,34 @@ surveillance/
 │           ├── alerts.py               # Alerts + history
 │           ├── settings_route.py       # App settings
 │           └── websocket_route.py      # WS /ws/alerts
+├── mobile/                             # React Native (Expo) frontend
+│   ├── app/
+│   │   ├── _layout.js                  # Root layout with auth gate
+│   │   ├── login.js                    # Login screen
+│   │   └── (tabs)/
+│   │       ├── _layout.js              # Tab navigator
+│   │       ├── index.js                # Dashboard
+│   │       ├── stream.js               # Live MJPEG viewer
+│   │       ├── roi.js                  # ROI zone editor
+│   │       ├── faces.js                # Face registration
+│   │       ├── alerts.js               # Alert history
+│   │       └── settings.js             # System settings
+│   └── src/
+│       ├── api.js                      # API client with JWT auth
+│       ├── AuthContext.js              # Auth context provider
+│       └── theme.js                    # Design tokens
 ├── scripts/
+│   ├── dashboard.html                  # Full testing console (browser)
 │   ├── roi_editor.html                 # Visual ROI editor (browser)
 │   └── alert_monitor.html             # Live WS alert viewer (browser)
 ├── storage/
 │   ├── uploads/                        # Uploaded MP4s
 │   ├── snapshots/                      # Alert JPEG snapshots
-│   ├── clips/                          # Video clips (reserved)
+│   ├── clips/                          # Video clips
 │   └── faces/                          # Registered face images
-├── run.py                              # Start server
+├── docker-compose.yml                  # PostgreSQL + API containers
+├── Dockerfile                          # Backend container image
+├── run.py                              # Start server (dev)
 ├── requirements.txt
 └── .env.example
 ```
@@ -68,34 +110,49 @@ surveillance/
 
 ## Quick Start
 
-### 1. Install dependencies
+### Option A: Docker (Recommended)
 
 ```bash
-# System deps (Ubuntu/Debian)
-sudo apt-get install -y cmake libopenblas-dev liblapack-dev libx11-dev
+# 1. Copy and edit environment
+cp .env.example .env
 
-# Python
+# 2. Start PostgreSQL + API
+docker compose up -d
+
+# 3. Open the API docs
+open http://localhost:8000/docs
+```
+
+### Option B: Local Development
+
+```bash
+# 1. Start PostgreSQL only
+docker compose up -d db
+
+# 2. Install Python dependencies
 python3.11 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-```
 
-### 2. Configure environment
-
-```bash
+# 3. Configure environment
 cp .env.example .env
-# Edit .env — set Twilio credentials and other values
-```
+# Edit .env — DATABASE_URL defaults to localhost:5432
 
-### 3. Run
-
-```bash
+# 4. Run the backend
 python run.py
 # or
 uvicorn app.main:app --reload
 ```
 
-### 4. Open the interactive API docs
+### Run the mobile app (browser debugging)
+
+```bash
+cd mobile
+npm install
+npx expo start --web
+```
+
+### Open the interactive API docs
 
 ```
 http://localhost:8000/docs
@@ -157,30 +214,6 @@ Default credentials: `admin` / `admin123`
 
 ---
 
-## Suspicion Scoring
-
-| Condition | Points |
-|---|---|
-| Unknown person | +1 |
-| Red / critical zone | +1 |
-| Night time (20:00–06:00) | +1 |
-| Loitering detected | +1 |
-
-**Score 0–1** → log only  
-**Score 2** → WebSocket alert to app  
-**Score 3+** → WebSocket + Twilio WhatsApp (SMS fallback)
-
----
-
-## Visual Tools (Browser)
-
-Open these HTML files directly in a browser (no server needed):
-
-- **`scripts/roi_editor.html`** — Draw and save ROI zones visually on a live camera frame
-- **`scripts/alert_monitor.html`** — Monitor real-time WebSocket alerts
-
----
-
 ## Zone Types
 
 | Type | Color | Meaning |
@@ -192,22 +225,24 @@ Open these HTML files directly in a browser (no server needed):
 
 ---
 
-## SQLite Tables
+## Hardware Cost (~₹4,730)
 
-`users` · `sources` · `roi_zones` · `known_faces` · `alerts` · `history` · `settings`
-
-Database file: `surveillance.db` (auto-created on first run).
+| Component | Cost (INR) |
+|---|---|
+| ESP32-CAM × 2 | ₹1,100 |
+| Processing Server (local PC / cloud) | — |
+| PIR HC-SR501 & IR LEDs | ₹280 |
+| MicroSD 32GB | ₹400 |
+| 5V 3A Power Supply | ₹150 |
 
 ---
 
-## Mobile App Integration
+## Privacy & Edge Computing
 
-The backend is REST+WebSocket — connect your mobile app to:
-
-1. `POST /auth/login` to get a JWT
-2. `GET /source/frame-preview/{id}` to show a camera thumbnail for ROI drawing
-3. `POST /roi/save` with coordinates drawn on the thumbnail
-4. `WS /ws/alerts?token=<jwt>` for push alerts
+- **No cloud dependency**: All processing runs locally (or on your own server)
+- **Novelty detection**: Only 512-d embedding vectors stored, not identities
+- **Embeddings never leave the network**: Aligned with India's DPDPA 2023
+- **Open-source stack**: No vendor lock-in or subscription fees
 
 ---
 
@@ -216,6 +251,7 @@ The backend is REST+WebSocket — connect your mobile app to:
 | Variable | Description |
 |---|---|
 | `APP_SECRET_KEY` | JWT signing secret |
+| `DATABASE_URL` | PostgreSQL connection string |
 | `TWILIO_ACCOUNT_SID` | Twilio account SID |
 | `TWILIO_AUTH_TOKEN` | Twilio auth token |
 | `TWILIO_FROM_WHATSAPP` | Sending WhatsApp number |

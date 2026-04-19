@@ -3,7 +3,8 @@ app/services/face_engine.py
 Registers known residents and classifies faces in detection frames
 as known or unknown.
 
-Migrated from face_recognition to DeepFace.
+Uses InsightFace (ArcFace) for lightweight 512-dimensional face embeddings.
+Runs efficiently on ARM and x86 via ONNX Runtime — no TensorFlow required.
 """
 
 import logging
@@ -14,12 +15,11 @@ from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
-from deepface import DeepFace
 
 logger = logging.getLogger(__name__)
 
 _UNKNOWN_LABEL = "unknown"
-_TOLERANCE = 0.35              # cosine distance threshold
+_TOLERANCE = 0.45              # cosine distance threshold (tuned for ArcFace 512-d)
 _UNKNOWN_MEMORY_SECONDS = 120
 
 # In-memory registry loaded from DB on startup / updated on register
@@ -32,8 +32,37 @@ _registry_lock = threading.Lock()
 _unknown_tracker: Dict[int, float] = {}
 _unknown_lock = threading.Lock()
 
-# DeepFace model
-_MODEL_NAME = "Facenet512"
+# InsightFace model (lazy-loaded)
+_face_app = None
+_model_lock = threading.Lock()
+
+
+# ── InsightFace model loader ────────────────────────────────────────────
+
+def _get_face_app():
+    """Lazy-load InsightFace model (thread-safe)."""
+    global _face_app
+    with _model_lock:
+        if _face_app is None:
+            try:
+                from insightface.app import FaceAnalysis
+                app = FaceAnalysis(
+                    name="buffalo_s",  # small model, good for edge
+                    providers=["CPUExecutionProvider"],
+                )
+                app.prepare(ctx_id=-1, det_size=(640, 480))
+                _face_app = app
+                logger.info("InsightFace model loaded (buffalo_s)")
+            except ImportError:
+                logger.warning(
+                    "insightface not installed — face engine disabled. "
+                    "Install with: pip install insightface onnxruntime"
+                )
+                return None
+            except Exception as exc:
+                logger.error("Failed to load InsightFace: %s", exc)
+                return None
+        return _face_app
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -51,23 +80,21 @@ def _cosine_distance(a: np.ndarray, b: np.ndarray) -> float:
     return 1.0 - float(np.dot(a, b))
 
 
-def _extract_embedding(img) -> Optional[np.ndarray]:
+def _extract_embedding(img: np.ndarray) -> Optional[np.ndarray]:
+    """Extract face embedding from a BGR image using InsightFace."""
+    app = _get_face_app()
+    if app is None:
+        return None
+
     try:
-        reps = DeepFace.represent(
-            img_path=img,
-            model_name=_MODEL_NAME,
-            enforce_detection=False,
-            detector_backend="opencv"
-        )
-
-        if not reps:
+        faces = app.get(img)
+        if not faces:
             return None
-
-        emb = reps[0]["embedding"]
-        return np.array(emb, dtype=np.float32)
-
+        # Use the largest face (most prominent)
+        best = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+        return best.embedding.astype(np.float32)
     except Exception as exc:
-        logger.warning("DeepFace embedding failed: %s", exc)
+        logger.warning("InsightFace embedding failed: %s", exc)
         return None
 
 

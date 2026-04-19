@@ -3,12 +3,13 @@ app/services/camera_gateway.py
 Manages live camera / video source connections.
 Each source runs in its own background thread, continuously reading frames.
 """
+import asyncio
 import cv2
 import threading
 import time
 import logging
-from pathlib import Path
-from typing import Dict, Optional, Generator
+from typing import AsyncGenerator, Dict, Optional, Union
+
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -48,7 +49,7 @@ class CameraStream:
     # ── Internal loop ──────────────────────────────────────────────────────
 
     def _open(self) -> bool:
-        uri: str | int = self.uri
+        uri: Union[str, int] = self.uri
         # Webcam index
         if self.uri.isdigit():
             uri = int(self.uri)
@@ -125,7 +126,7 @@ def list_active() -> Dict[int, bool]:
 
 def extract_preview_frame(uri: str) -> Optional[np.ndarray]:
     """Open a source once, grab a single frame, release immediately."""
-    uri_val: str | int = uri
+    uri_val: Union[str, int] = uri
     if isinstance(uri, str) and uri.isdigit():
         uri_val = int(uri)
     cap = cv2.VideoCapture(uri_val)
@@ -141,17 +142,18 @@ def frame_to_jpeg(frame: np.ndarray, quality: int = 80) -> bytes:
     return buf.tobytes()
 
 
-def mjpeg_generator(source_id: int) -> Generator[bytes, None, None]:
-    """Yields MJPEG multipart boundary chunks for a StreamingResponse."""
+async def mjpeg_generator(source_id: int) -> AsyncGenerator[bytes, None]:
+    """Yields MJPEG multipart boundary chunks for a StreamingResponse.
+    Uses asyncio.sleep() to avoid blocking the event loop."""
     boundary = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
     stream = get_stream(source_id)
     if stream is None:
         return
-    while True:
+    while stream.is_alive():
         frame = stream.get_frame()
         if frame is None:
-            time.sleep(0.05)
+            await asyncio.sleep(0.05)
             continue
         jpeg = frame_to_jpeg(frame)
         yield boundary + jpeg + b"\r\n"
-        time.sleep(0.033)  # ~30 fps cap
+        await asyncio.sleep(0.033)  # ~30 fps cap
