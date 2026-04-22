@@ -7,19 +7,35 @@ GET  /source/frame-preview/{source_id}
 """
 import shutil
 from pathlib import Path
+from typing import Optional
 
 import aiosqlite
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse, Response
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, oauth2_scheme
 from app.core.config import get_settings
+from app.core.security import decode_token
 from app.db.database import get_db
 from app.models.schemas import SourceCreate, SourceOut
 from app.services import camera_gateway, surveillance_orchestrator
 
 router = APIRouter(tags=["camera"])
 settings = get_settings()
+
+
+def get_stream_user(
+    bearer_token: Optional[str] = Depends(oauth2_scheme),
+    query_token: Optional[str] = Query(default=None, alias="token"),
+) -> dict:
+    """Allow MJPEG auth from either Authorization header or ?token query."""
+    token = bearer_token or query_token
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    payload = decode_token(token)
+    if not payload:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    return payload
 
 
 # ─── Connect a live camera ────────────────────────────────────────────────
@@ -82,7 +98,7 @@ async def upload_video(
 @router.get("/stream/live/{source_id}")
 async def live_stream(
     source_id: int,
-    _user=Depends(get_current_user),
+    _user=Depends(get_stream_user),
 ):
     stream = camera_gateway.get_stream(source_id)
     if stream is None:

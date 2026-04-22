@@ -809,7 +809,8 @@ let streamActive = false;
 function startStream() {
   const sid = document.getElementById("stream-src-id").value;
   if (!sid) { toast("Enter a source ID", "err"); return; }
-  const url = `${api()}/stream/live/${sid}`;
+  if (!TOKEN) { toast("Login first", "err"); return; }
+  const url = `${api()}/stream/live/${sid}?token=${encodeURIComponent(TOKEN)}`;
   const box = document.getElementById("stream-box");
 
   box.innerHTML = `
