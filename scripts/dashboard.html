@@ -623,10 +623,14 @@ async function doLogin() {
 
   // 2. Auth
   try {
+    const body = new URLSearchParams({
+      username: document.getElementById("login-user").value,
+      password: document.getElementById("login-pass").value,
+    });
     const r = await fetch(`${api()}/auth/login`, {
-      method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ username: document.getElementById("login-user").value,
-                             password: document.getElementById("login-pass").value })
+      method:"POST",
+      headers:{"Content-Type":"application/x-www-form-urlencoded"},
+      body,
     });
     if (!r.ok) throw new Error(await r.text());
     TOKEN = (await r.json()).access_token;
@@ -1117,7 +1121,7 @@ async function loadFaces() {
     }
     el.innerHTML = faces.map(f => `
       <div class="face-card">
-        <img src="${api()}/storage/faces/${f.image_path.split('/').pop()}"
+        <img src="${api()}/storage/faces/${f.image_path.split(/[\\/]/).pop()}"
              onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 80 80%22><rect width=%2280%22 height=%2280%22 fill=%22%231c2333%22/><text x=%2240%22 y=%2248%22 font-size=%2230%22 text-anchor=%22middle%22>👤</text></svg>'"
              alt="${f.name}">
         <div class="face-name">${f.name}</div>
@@ -1169,9 +1173,17 @@ function alertHTML(a) {
   const sc = a.suspicion_score;
   let meta = "";
   try { const m = JSON.parse(a.meta || "{}"); meta = [m.is_unknown?"unknown":"known", m.loitering?"loitering":"", m.in_danger_zone?"danger zone":""].filter(Boolean).join(" · "); } catch(e) {}
+  let snap = "";
+  if (a.snapshot_path) {
+    const fname = a.snapshot_path.split(/[\\/]/).pop();
+    snap = `<img src="${api()}/storage/snapshots/${fname}"
+                 onerror="this.style.display='none'"
+                 style="width:88px;height:66px;object-fit:cover;border-radius:4px;border:1px solid var(--border);flex-shrink:0">`;
+  }
   return `
-    <div class="alert-item ${scoreClass(sc)}">
+    <div class="alert-item ${scoreClass(sc)}" style="grid-template-columns:auto auto 1fr auto">
       <span class="alert-score ${scoreBadgeClass(sc)}">${sc}</span>
+      ${snap}
       <div class="alert-body">
         <div class="title">${a.alert_type.toUpperCase()} — Source ${a.source_id ?? '?'}</div>
         <div class="detail">${meta || 'no detail'}</div>
@@ -1188,7 +1200,8 @@ function prependAlert(data) {
   const div = document.createElement("div");
   div.innerHTML = alertHTML({
     suspicion_score: data.suspicion_score, alert_type: data.alert_type,
-    source_id: data.source_id, meta: null, created_at: data.timestamp
+    source_id: data.source_id, meta: null, created_at: data.timestamp,
+    snapshot_path: data.snapshot_path,
   });
   feed.prepend(div.firstElementChild);
 }

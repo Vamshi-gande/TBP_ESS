@@ -59,6 +59,7 @@ class CameraStream:
         return True
 
     def _read_loop(self) -> None:
+        is_file_source = not self.uri.isdigit() and "://" not in self.uri
         while self._running:
             if self._cap is None or not self._cap.isOpened():
                 if not self._open():
@@ -68,13 +69,21 @@ class CameraStream:
                     continue
             ret, frame = self._cap.read()
             if not ret:
-                logger.warning("CameraStream %d: frame read failed, reconnecting", self.source_id)
-                self._cap.release()
-                self._cap = None
-                time.sleep(_RECONNECT_DELAY)
-                continue
+                # File EOF: loop back to frame 0 instead of reconnecting.
+                if is_file_source and self._cap is not None:
+                    self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    ret, frame = self._cap.read()
+                if not ret:
+                    logger.warning("CameraStream %d: frame read failed, reconnecting", self.source_id)
+                    self._cap.release()
+                    self._cap = None
+                    time.sleep(_RECONNECT_DELAY)
+                    continue
             with self._lock:
                 self._frame = frame
+            # Pace file playback to the source FPS so it doesn't race through the buffer.
+            if is_file_source:
+                time.sleep(1 / 30.0)
 
     # ── Public API ─────────────────────────────────────────────────────────
 

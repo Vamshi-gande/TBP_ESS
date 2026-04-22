@@ -43,9 +43,17 @@ def _get_model():
     global _model
     with _model_lock:
         if _model is None:
+            import torch
             from ultralytics import YOLO
             from app.core.config import get_settings
-            _model = YOLO(get_settings().YOLO_MODEL)
+            # torch >=2.6 defaults weights_only=True, which rejects ultralytics' pickled
+            # DetectionModel class. Load with weights_only=False (trusted local weight file).
+            _orig_load = torch.load
+            torch.load = lambda *a, **kw: _orig_load(*a, **{**kw, "weights_only": False})
+            try:
+                _model = YOLO(get_settings().YOLO_MODEL)
+            finally:
+                torch.load = _orig_load
             logger.info("YOLOv8 model loaded")
         return _model
 

@@ -28,6 +28,10 @@ settings = get_settings()
 _loop: Optional[asyncio.AbstractEventLoop] = None
 _active: Dict[int, bool] = {}
 
+# Per-track dedup: (source_id, track_id, alert_type) -> last_alert_ts
+_ALERT_DEDUP_SECONDS = 5.0
+_last_alerts: Dict[tuple, float] = {}
+
 
 def set_event_loop(loop: asyncio.AbstractEventLoop) -> None:
     global _loop
@@ -36,10 +40,13 @@ def set_event_loop(loop: asyncio.AbstractEventLoop) -> None:
 
 # ── Helpers ───────────────────────────────────────────────────────────────
 
-def _save_snapshot(frame: np.ndarray, source_id: int) -> str:
+def _save_snapshot(frame: np.ndarray, source_id: int) -> Optional[str]:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     path = settings.snapshots_dir / f"src{source_id}_{ts}.jpg"
-    cv2.imwrite(str(path), frame)
+    ok = cv2.imwrite(str(path), frame)
+    if not ok:
+        logger.warning("Failed to write snapshot to %s", path)
+        return None
     return str(path)
 
 
@@ -53,12 +60,16 @@ def _centroid(bbox):
 def _make_callback(source_id: int, db_path: str):
     """Returns a callback function bound to source_id."""
 
+    def _log_future_exc(fut: asyncio.Future) -> None:
+        exc = fut.exception()
+        if exc is not None:
+            logger.exception("Orchestrator _process failed on source %d", source_id, exc_info=exc)
+
     def on_result(result: PipelineResult) -> None:
         if _loop is None or _loop.is_closed():
             return
-        asyncio.run_coroutine_threadsafe(
-            _process(result, db_path), _loop
-        )
+        fut = asyncio.run_coroutine_threadsafe(_process(result, db_path), _loop)
+        fut.add_done_callback(_log_future_exc)
 
     return on_result
 
@@ -100,13 +111,14 @@ async def _process(result: PipelineResult, db_path: str) -> None:
                     if loit:
                         loitering = True
 
-            # Face classification (lightweight crop)
+            # Face classification (run in thread pool so DeepFace embedding doesn't block the event loop)
             x1, y1, x2, y2 = det.bbox
             face_crop = result.frame[max(0, y1):y2, max(0, x1):x2]
             is_unknown = True
             if face_crop.size > 0:
-                classifications = face_engine.classify_faces_in_frame(
-                    result.frame, [det.bbox]
+                loop = asyncio.get_event_loop()
+                classifications = await loop.run_in_executor(
+                    None, face_engine.classify_faces_in_frame, result.frame, [det.bbox]
                 )
                 if classifications:
                     _, is_known = classifications[0]
@@ -124,6 +136,16 @@ async def _process(result: PipelineResult, db_path: str) -> None:
             if score == 0:
                 continue  # nothing notable
 
+            # Dedup identical alerts for same track within a short window so
+            # the alert feed stays readable during demo.
+            alert_type_tmp = "loitering" if loitering else ("unknown_face" if is_unknown else "detection")
+            dedup_key = (result.source_id, det.track_id, alert_type_tmp)
+            now_ts = time.time()
+            last_ts = _last_alerts.get(dedup_key, 0.0)
+            if now_ts - last_ts < _ALERT_DEDUP_SECONDS:
+                continue
+            _last_alerts[dedup_key] = now_ts
+
             # Save snapshot
             snapshot = _save_snapshot(result.frame, result.source_id)
 
@@ -136,7 +158,7 @@ async def _process(result: PipelineResult, db_path: str) -> None:
                 "in_danger_zone": in_danger,
                 "matched_rois": [r["name"] for r in matched_rois],
             })
-            alert_type = "loitering" if loitering else ("unknown_face" if is_unknown else "detection")
+            alert_type = alert_type_tmp
 
             async with db.execute(
                 """INSERT INTO alerts
