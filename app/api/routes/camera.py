@@ -82,15 +82,39 @@ async def upload_video(
 @router.get("/stream/live/{source_id}")
 async def live_stream(
     source_id: int,
+    db: aiosqlite.Connection = Depends(get_db),
     _user=Depends(get_current_user),
 ):
+    async with db.execute(
+        "SELECT source_type, uri FROM sources WHERE id=?",
+        (source_id,),
+    ) as cur:
+        row = await cur.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    source_type = row["source_type"]
+    uri = row["uri"]
+
+    # Direct browser stream for network/IP cameras
+    if source_type.lower() in ["ipcam", "esp32", "network", "phone"]:
+        return {"live_url": uri}
+
+    # Existing backend MJPEG stream for webcam/upload
     stream = camera_gateway.get_stream(source_id)
+
     if stream is None:
         raise HTTPException(status_code=404, detail="Source not active")
 
     return StreamingResponse(
         camera_gateway.mjpeg_generator(source_id),
         media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+            "Connection": "keep-alive",
+        },
     )
 
 

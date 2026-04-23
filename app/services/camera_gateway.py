@@ -49,42 +49,75 @@ class CameraStream:
 
     def _open(self) -> bool:
         uri: str | int = self.uri
-        # Webcam index
+
+    # Webcam source like "0", "1"
         if self.uri.isdigit():
-            uri = int(self.uri)
-        cap = cv2.VideoCapture(uri)
+            cam_index = int(self.uri)
+
+        # Windows webcam backend
+            cap = cv2.VideoCapture(cam_index, cv2.CAP_DSHOW)
+
+        # Stable defaults
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            cap.set(cv2.CAP_PROP_FPS, 30)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+        else:
+            uri = self.uri
+            cap = cv2.VideoCapture(uri)
+
         if not cap.isOpened():
             return False
+
         self._cap = cap
         return True
 
     def _read_loop(self) -> None:
         is_file_source = not self.uri.isdigit() and "://" not in self.uri
+
         while self._running:
+
             if self._cap is None or not self._cap.isOpened():
                 if not self._open():
                     self._last_error = f"Cannot open source: {self.uri}"
-                    logger.warning("CameraStream %d: reconnecting in %ds", self.source_id, _RECONNECT_DELAY)
+                    logger.warning(
+                        "CameraStream %d: reconnecting in %ds",
+                        self.source_id,
+                        _RECONNECT_DELAY
+                    )
                     time.sleep(_RECONNECT_DELAY)
                     continue
+
+                # Webcam warm-up time
+                if self.uri.isdigit():
+                    time.sleep(1.5)
+
             ret, frame = self._cap.read()
-            if not ret:
-                # File EOF: loop back to frame 0 instead of reconnecting.
+
+            if not ret or frame is None:
+
+            # Loop video files
                 if is_file_source and self._cap is not None:
                     self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     ret, frame = self._cap.read()
-                if not ret:
-                    logger.warning("CameraStream %d: frame read failed, reconnecting", self.source_id)
-                    self._cap.release()
-                    self._cap = None
-                    time.sleep(_RECONNECT_DELAY)
+
+                if not ret or frame is None:
+                    logger.warning(
+                        "CameraStream %d: frame read failed",
+                        self.source_id
+                    )
+                    time.sleep(0.1)
                     continue
+
             with self._lock:
                 self._frame = frame
-            # Pace file playback to the source FPS so it doesn't race through the buffer.
+
+        # Keep video files real-time paced
             if is_file_source:
                 time.sleep(1 / 30.0)
-
+            else:
+                time.sleep(0.01)
     # ── Public API ─────────────────────────────────────────────────────────
 
     def get_frame(self) -> Optional[np.ndarray]:
