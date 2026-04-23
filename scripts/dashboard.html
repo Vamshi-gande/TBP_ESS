@@ -358,7 +358,7 @@ input:focus, select:focus { border-color: var(--accent); }
             <div class="field-label mt4">Source Name</div>
             <input id="cam-name" placeholder="e.g. Front Door">
             <div class="field-label mt4">Stream URL</div>
-            <input id="cam-url" placeholder="rtsp://... or http://...">
+            <input id="cam-url" placeholder="rtsp://... or http://... or 0,1,2 for webcam">
             <div class="field-label mt4">Type</div>
             <select id="cam-type">
               <option value="ip_camera">IP Camera</option>
@@ -366,6 +366,14 @@ input:focus, select:focus { border-color: var(--accent); }
               <option value="webcam">Webcam (index)</option>
             </select>
             <button class="btn btn-accent btn-block mt8" onclick="connectCamera()">⚡ Connect Camera</button>
+          </div>
+
+          <!-- Webcam Discovery -->
+          <div class="info-card">
+            <h4>🔍 Webcam Discovery</h4>
+            <div style="font-size:.75rem;color:var(--muted);margin-bottom:8px">Find connected USB / built-in webcams</div>
+            <button class="btn btn-violet btn-block" onclick="discoverWebcams()" id="discover-btn">🔎 Discover Webcams</button>
+            <div id="webcam-list" style="margin-top:10px;display:flex;flex-direction:column;gap:6px"></div>
           </div>
 
           <!-- System Status -->
@@ -806,55 +814,39 @@ async function connectCamera() {
 // ═══════════════════════════════════════════════════════
 let streamActive = false;
 
-async function startStream() {
+function startStream() {
   const sid = document.getElementById("stream-src-id").value;
-  if (!sid) {
-    toast("Enter a source ID", "err");
-    return;
-  }
+  if (!sid) { toast("Enter a source ID", "err"); return; }
+  if (!TOKEN) { toast("Login first", "err"); return; }
 
   const box = document.getElementById("stream-box");
+  // Use <img> tag with ?token= query param for MJPEG auth
+  const streamUrl = `${api()}/stream/live/${sid}?token=${encodeURIComponent(TOKEN)}`;
 
-  try {
-    const res = await fetch(`${api()}/stream/live/${sid}`, {
-      headers: headers()
-    });
+  box.innerHTML = `
+    <div class="stream-badge">
+      <div class="live-blink"></div>
+      LIVE · SRC ${sid}
+    </div>
+    <img
+      id="live-stream-img"
+      src="${streamUrl}"
+      style="width:100%;max-height:480px;object-fit:contain;border-radius:8px;background:#000"
+      onerror="streamError()"
+    >
+  `;
 
-    let finalUrl = `${api()}/stream/live/${sid}`;
-
-    const ct = res.headers.get("content-type") || "";
-
-    // If backend returned JSON with live_url
-    if (ct.includes("application/json")) {
-      const data = await res.json();
-      finalUrl = data.live_url;
-    }
-
-    box.innerHTML = `
-      <div class="stream-badge">
-        <div class="live-blink"></div>
-        LIVE · SRC ${sid}
-      </div>
-
-      <iframe
-  src="${finalUrl}"
-  style="width:100%;height:420px;border:none;border-radius:8px;background:#000">
-</iframe>
-    `;
-
-    document.getElementById("stream-status").textContent = "LIVE";
-    document.getElementById("stream-status").className = "sbadge sbadge-ok";
-
-    streamActive = true;
-    log("Stream started for source " + sid, "ok");
-
-  } catch (e) {
-    streamError();
-  }
+  document.getElementById("stream-status").textContent = "LIVE";
+  document.getElementById("stream-status").className = "sbadge sbadge-ok";
+  streamActive = true;
+  log("Stream started for source " + sid, "ok");
 }
 
 function stopStream() {
   const box = document.getElementById("stream-box");
+  // Clear the img src to stop fetching MJPEG frames
+  const img = document.getElementById("live-stream-img");
+  if (img) img.src = "";
   box.innerHTML = `<div class="stream-placeholder"><div class="icon">📷</div><div>Stream stopped</div></div>`;
   document.getElementById("stream-status").textContent = "STOPPED";
   document.getElementById("stream-status").className = "sbadge sbadge-warn";
@@ -871,10 +863,19 @@ function streamError() {
 async function grabSnapshot() {
   const sid = document.getElementById("stream-src-id").value;
   if (!sid || !TOKEN) return;
-  const url = `${api()}/source/frame-preview/${sid}`;
-  const a = document.createElement("a");
-  a.href = url; a.download = `snapshot_src${sid}.jpg`; a.click();
-  toast("Snapshot downloaded", "ok");
+  // Fetch the snapshot with auth and trigger download
+  try {
+    const res = await fetch(`${api()}/source/frame-preview/${sid}`, { headers: headers() });
+    if (!res.ok) throw new Error("Failed to fetch snapshot");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `snapshot_src${sid}.jpg`; a.click();
+    URL.revokeObjectURL(url);
+    toast("Snapshot downloaded", "ok");
+  } catch(e) {
+    toast("Snapshot failed: " + e.message, "err");
+  }
 }
 
 async function loadPreviewFrame() {
@@ -883,6 +884,62 @@ async function loadPreviewFrame() {
   const url = `${api()}/source/frame-preview/${sid}?_=${Date.now()}`;
   document.getElementById("preview-result").innerHTML =
     `<img src="${url}" style="max-width:100%;border-radius:8px;border:1px solid var(--border)" onerror="this.replaceWith(document.createTextNode('Failed to load preview'))">`;
+}
+
+// ═══════════════════════════════════════════════════════
+// WEBCAM DISCOVERY
+// ═══════════════════════════════════════════════════════
+async function discoverWebcams() {
+  if (!TOKEN) { toast("Login first", "err"); return; }
+  const btn = document.getElementById("discover-btn");
+  btn.disabled = true; btn.textContent = "Scanning…";
+  const el = document.getElementById("webcam-list");
+  el.innerHTML = '<span style="color:var(--muted);font-size:.72rem;font-family:var(--mono)">Probing camera indices 0-9…</span>';
+
+  try {
+    const r = await fetch(`${api()}/camera/discover`, { headers: headers() });
+    if (!r.ok) throw new Error(await r.text());
+    const data = await r.json();
+    const cams = data.cameras || [];
+
+    if (!cams.length) {
+      el.innerHTML = '<span style="color:var(--warn);font-size:.75rem">No webcams found. Make sure your camera is plugged in.</span>';
+    } else {
+      el.innerHTML = cams.map(c => `
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--surface3);border:1px solid var(--border);border-radius:6px">
+          <span style="font-size:1.2rem">📷</span>
+          <div style="flex:1">
+            <div style="font-weight:600;font-size:.8rem">${c.name}</div>
+            <div style="font-size:.68rem;color:var(--muted);font-family:var(--mono)">Index: ${c.index} · ${c.resolution}</div>
+          </div>
+          <button class="btn btn-accent btn-sm" onclick="quickConnectWebcam(${c.index},'${c.name}')">⚡ Connect</button>
+        </div>
+      `).join("");
+      log(`Found ${cams.length} webcam(s)`, "ok");
+    }
+  } catch(e) {
+    el.innerHTML = `<span style="color:var(--danger);font-size:.75rem">Discovery failed: ${e.message}</span>`;
+    log("Webcam discovery failed: " + e.message, "err");
+  }
+  btn.disabled = false; btn.textContent = "🔎 Discover Webcams";
+}
+
+async function quickConnectWebcam(index, name) {
+  if (!TOKEN) { toast("Login first", "err"); return; }
+  try {
+    const r = await fetch(`${api()}/camera/connect`, {
+      method: "POST", headers: headers(true),
+      body: JSON.stringify({ name: name, uri: String(index), source_type: "webcam" })
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const src = await r.json();
+    log(`Webcam ${index} connected as source #${src.id}`, "ok");
+    toast(`${name} connected — ID ${src.id}`, "ok");
+    loadSources();
+  } catch(e) {
+    toast("Connect failed: " + e.message, "err");
+    log("Quick connect failed: " + e.message, "err");
+  }
 }
 
 // ═══════════════════════════════════════════════════════

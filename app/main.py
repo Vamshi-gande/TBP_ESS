@@ -10,6 +10,7 @@ from pathlib import Path
 import aiosqlite
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import get_settings
@@ -73,10 +74,29 @@ async def lifespan(app: FastAPI):
             sources = [dict(r) for r in await cur.fetchall()]
 
     from app.services import camera_gateway
+    seen_webcam_indices = set()
     for src in sources:
-        camera_gateway.connect_source(src["id"], src["uri"])
-        surveillance_orchestrator.activate_source(src["id"])
-        logger.info("Auto-resumed source %d: %s", src["id"], src["uri"])
+        try:
+            # Skip duplicate webcam indices to avoid DSHOW conflicts
+            uri = src["uri"].strip()
+            if uri.isdigit():
+                cam_idx = int(uri)
+                if cam_idx in seen_webcam_indices:
+                    logger.warning(
+                        "Skipping source %d: webcam index %d already in use",
+                        src["id"], cam_idx,
+                    )
+                    continue
+                seen_webcam_indices.add(cam_idx)
+
+            camera_gateway.connect_source(src["id"], src["uri"])
+            surveillance_orchestrator.activate_source(src["id"])
+            logger.info("Auto-resumed source %d: %s", src["id"], src["uri"])
+        except Exception as exc:
+            logger.error(
+                "Failed to auto-resume source %d (%s): %s",
+                src["id"], src["uri"], exc,
+            )
 
     logger.info("Backend ready.")
     yield
@@ -110,6 +130,11 @@ def create_app() -> FastAPI:
     Path(settings.STORAGE_BASE).mkdir(parents=True, exist_ok=True)
     app.mount("/storage", StaticFiles(directory=settings.STORAGE_BASE), name="storage")
 
+    # Serve the scripts directory (dashboard, ROI editor, etc.)
+    scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
+    if scripts_dir.is_dir():
+        app.mount("/scripts", StaticFiles(directory=str(scripts_dir), html=True), name="scripts")
+
     # Register routers
     from app.api.routes.auth import router as auth_router
     from app.api.routes.camera import router as camera_router
@@ -130,6 +155,10 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["meta"])
     async def health():
         return {"status": "ok", "version": "1.0.0"}
+
+    @app.get("/dashboard", tags=["meta"])
+    async def dashboard_redirect():
+        return RedirectResponse(url="/scripts/dashboard.html")
 
     return app
 

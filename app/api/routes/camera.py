@@ -4,22 +4,39 @@ POST /camera/connect
 POST /video/upload
 GET  /stream/live/{source_id}
 GET  /source/frame-preview/{source_id}
+GET  /camera/discover
 """
 import shutil
 from pathlib import Path
+from typing import Optional
 
 import aiosqlite
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse, Response
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, oauth2_scheme
 from app.core.config import get_settings
+from app.core.security import decode_token
 from app.db.database import get_db
 from app.models.schemas import SourceCreate, SourceOut
 from app.services import camera_gateway, surveillance_orchestrator
 
 router = APIRouter(tags=["camera"])
 settings = get_settings()
+
+
+def get_stream_user(
+    bearer_token: Optional[str] = Depends(oauth2_scheme),
+    query_token: Optional[str] = Query(default=None, alias="token"),
+) -> dict:
+    """Allow MJPEG auth from either Authorization header or ?token query."""
+    token = bearer_token or query_token
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    payload = decode_token(token)
+    if not payload:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    return payload
 
 
 # ─── Connect a live camera ────────────────────────────────────────────────
@@ -83,8 +100,14 @@ async def upload_video(
 async def live_stream(
     source_id: int,
     db: aiosqlite.Connection = Depends(get_db),
-    _user=Depends(get_current_user),
+    _user=Depends(get_stream_user),
 ):
+    """
+    Returns an MJPEG stream for any source type.
+    All sources are proxied through the backend MJPEG generator so that
+    the dashboard can display them in a simple <img> tag with ?token= auth.
+    """
+    # Verify source exists
     async with db.execute(
         "SELECT source_type, uri FROM sources WHERE id=?",
         (source_id,),
@@ -94,14 +117,7 @@ async def live_stream(
     if not row:
         raise HTTPException(status_code=404, detail="Source not found")
 
-    source_type = row["source_type"]
-    uri = row["uri"]
-
-    # Direct browser stream for network/IP cameras
-    if source_type.lower() in ["ipcam", "esp32", "network", "phone"]:
-        return {"live_url": uri}
-
-    # Existing backend MJPEG stream for webcam/upload
+    # All source types are streamed via the backend MJPEG generator
     stream = camera_gateway.get_stream(source_id)
 
     if stream is None:
@@ -111,9 +127,10 @@ async def live_stream(
         camera_gateway.mjpeg_generator(source_id),
         media_type="multipart/x-mixed-replace; boundary=frame",
         headers={
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
             "Connection": "keep-alive",
+            "X-Content-Type-Options": "nosniff",
         },
     )
 
@@ -147,6 +164,18 @@ async def frame_preview(
         raise HTTPException(status_code=503, detail="Cannot grab frame from source")
 
     return Response(content=camera_gateway.frame_to_jpeg(frame), media_type="image/jpeg")
+
+
+# ─── Discover webcams ─────────────────────────────────────────────────────
+
+@router.get("/camera/discover")
+async def discover_webcams(
+    _user=Depends(get_current_user),
+):
+    """Probe local webcam indices 0-9 and return available cameras.
+    Useful for finding external USB webcams."""
+    cameras = camera_gateway.discover_webcams()
+    return {"cameras": cameras}
 
 
 # ─── List / deactivate sources ────────────────────────────────────────────
