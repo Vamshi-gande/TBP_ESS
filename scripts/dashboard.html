@@ -396,28 +396,37 @@ input:focus, select:focus { border-color: var(--accent); }
 
       <!-- ── TAB: Stream ── -->
       <div class="tab-view" id="view-stream">
-        <div class="stream-controls">
-          <div class="field-label" style="margin:0">Source ID:</div>
-          <input id="stream-src-id" type="number" value="1" style="width:70px">
-          <button class="btn btn-accent" onclick="startStream()">▶ Start Stream</button>
-          <button class="btn btn-danger" onclick="stopStream()">■ Stop</button>
-          <button class="btn btn-ghost" onclick="grabSnapshot()">📸 Snapshot</button>
-          <span id="stream-status" class="sbadge sbadge-warn">IDLE</span>
-        </div>
-
-        <div class="stream-box" id="stream-box">
-          <div class="stream-placeholder">
-            <div class="icon">📷</div>
-            <div>Select a source and press Start Stream</div>
+        <!-- Camera selector grid (shown when no stream active) -->
+        <div id="stream-camera-picker">
+          <div class="row-between" style="margin-bottom:12px">
+            <div class="section-title" style="margin:0">Select a Camera</div>
+            <button class="btn btn-ghost btn-sm" onclick="loadStreamCameras()">↻ Refresh</button>
+          </div>
+          <div class="card-grid" id="stream-camera-grid">
+            <div style="color:var(--muted);font-size:.75rem;grid-column:1/-1;text-align:center;padding:30px;font-family:var(--mono)">Login &amp; add cameras to see them here</div>
           </div>
         </div>
 
-        <div class="section-title">Preview Frame (for ROI editor)</div>
-        <div class="row" style="gap:8px">
-          <input id="preview-src-id" type="number" value="1" style="width:70px">
-          <button class="btn btn-ghost" onclick="loadPreviewFrame()">Load Preview Frame</button>
+        <!-- Stream view (shown when streaming) -->
+        <div id="stream-active-view" style="display:none">
+          <div class="stream-controls">
+            <button class="btn btn-ghost" onclick="backToCameraPicker()">← Back</button>
+            <span id="stream-source-label" style="font-weight:600;font-size:.85rem"></span>
+            <button class="btn btn-danger" onclick="stopStream()">■ Stop</button>
+            <button class="btn btn-ghost" onclick="grabSnapshot()">📸 Snapshot</button>
+            <span id="stream-status" class="sbadge sbadge-warn">IDLE</span>
+          </div>
+
+          <div class="stream-box" id="stream-box">
+            <div class="stream-placeholder">
+              <div class="icon">📷</div>
+              <div>Select a camera to start streaming</div>
+            </div>
+          </div>
         </div>
-        <div id="preview-result" style="margin-top:8px"></div>
+
+        <input id="stream-src-id" type="hidden" value="1">
+        <input id="preview-src-id" type="hidden" value="1">
       </div>
 
       <!-- ── TAB: Upload ── -->
@@ -582,6 +591,7 @@ function switchTab(name) {
   if (name === "alerts") { loadAlertTab(); }
   if (name === "faces")  { loadFaces(); }
   if (name === "upload") { loadUploadSources(); }
+  if (name === "stream") { loadStreamCameras(); }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -767,7 +777,7 @@ async function loadSources() {
       return;
     }
     el.innerHTML = srcs.map(s => `
-      <div class="src-card" onclick="selectSource(${s.id})">
+      <div class="src-card" onclick="selectSource(${s.id},'${s.name.replace(/'/g,"\\'")}')">
         <div class="src-name">${s.name}</div>
         <div class="src-meta">#${s.id} · ${s.uri.slice(0,28)}${s.uri.length>28?'…':''}</div>
         <div class="src-type">${s.source_type}</div>
@@ -776,12 +786,12 @@ async function loadSources() {
   } catch(e) { log("Load sources error: " + e.message, "err"); }
 }
 
-function selectSource(id) {
+function selectSource(id, name) {
   document.getElementById("stream-src-id").value = id;
   document.getElementById("preview-src-id").value = id;
   document.getElementById("roi-src-id").value = id;
   switchTab("stream");
-  toast("Source " + id + " selected", "info");
+  startStreamForSource(id, name || 'Source ' + id);
 }
 
 // ═══════════════════════════════════════════════════════
@@ -813,40 +823,92 @@ async function connectCamera() {
 // STREAM
 // ═══════════════════════════════════════════════════════
 let streamActive = false;
+let _currentStreamSourceId = null;
 
-function startStream() {
-  const sid = document.getElementById("stream-src-id").value;
-  if (!sid) { toast("Enter a source ID", "err"); return; }
+async function loadStreamCameras() {
+  if (!TOKEN) return;
+  const grid = document.getElementById("stream-camera-grid");
+  grid.innerHTML = '<div style="color:var(--muted);font-size:.75rem;grid-column:1/-1;text-align:center;padding:20px;font-family:var(--mono)">Loading cameras…</div>';
+  try {
+    const r = await fetch(`${api()}/sources`, { headers: headers() });
+    if (!r.ok) throw new Error("Failed to fetch sources");
+    const srcs = await r.json();
+    if (!srcs.length) {
+      grid.innerHTML = '<div style="color:var(--dim);font-size:.78rem;grid-column:1/-1;text-align:center;padding:40px;font-family:var(--mono)"><div style="font-size:2rem;margin-bottom:8px">📷</div>No cameras connected yet.<br>Go to <strong style="color:var(--accent);cursor:pointer" onclick="switchTab(\'connect\')">Connect</strong> to add one.</div>';
+      return;
+    }
+    grid.innerHTML = srcs.map(s => {
+      const typeIcon = s.source_type === 'webcam' ? '🎥' : s.source_type === 'upload' ? '🎬' : s.source_type === 'esp32' ? '📡' : '📹';
+      const typeBg = s.source_type === 'webcam' ? '#0d2b1e' : s.source_type === 'upload' ? '#1a1a2e' : '#0d1e2b';
+      return `
+        <div class="info-card" style="cursor:pointer;transition:border-color .2s,transform .15s,box-shadow .2s" 
+             onmouseenter="this.style.borderColor='var(--accent)';this.style.transform='translateY(-2px)';this.style.boxShadow='0 4px 20px rgba(0,229,255,.1)'"
+             onmouseleave="this.style.borderColor='var(--border)';this.style.transform='none';this.style.boxShadow='none'"
+             onclick="startStreamForSource(${s.id},'${s.name.replace(/'/g,"\\'")}')">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+            <span style="font-size:1.6rem">${typeIcon}</span>
+            <div style="flex:1">
+              <div style="font-weight:600;font-size:.9rem">${s.name}</div>
+              <div style="font-size:.68rem;color:var(--muted);font-family:var(--mono);margin-top:2px">#${s.id} · ${s.uri.length > 30 ? s.uri.slice(0,30) + '…' : s.uri}</div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <span style="font-size:.65rem;color:var(--accent);background:${typeBg};padding:2px 8px;border-radius:3px;font-family:var(--mono)">${s.source_type}</span>
+            <span style="margin-left:auto;font-size:.72rem;color:var(--accent);font-weight:600">▶ Stream</span>
+          </div>
+        </div>`;
+    }).join("");
+  } catch(e) {
+    grid.innerHTML = `<div style="color:var(--danger);font-size:.75rem;grid-column:1/-1;text-align:center;padding:20px">${e.message}</div>`;
+  }
+}
+
+function startStreamForSource(sid, name) {
   if (!TOKEN) { toast("Login first", "err"); return; }
+  _currentStreamSourceId = sid;
+  document.getElementById("stream-src-id").value = sid;
+  document.getElementById("preview-src-id").value = sid;
+  document.getElementById("roi-src-id").value = sid;
+
+  // Hide picker, show stream view
+  document.getElementById("stream-camera-picker").style.display = "none";
+  document.getElementById("stream-active-view").style.display = "flex";
+  document.getElementById("stream-active-view").style.flexDirection = "column";
+  document.getElementById("stream-active-view").style.gap = "16px";
+  document.getElementById("stream-active-view").style.flex = "1";
+
+  document.getElementById("stream-source-label").textContent = `${name} (#${sid})`;
 
   const box = document.getElementById("stream-box");
-  // Use <img> tag with ?token= query param for MJPEG auth
   const streamUrl = `${api()}/stream/live/${sid}?token=${encodeURIComponent(TOKEN)}`;
 
   box.innerHTML = `
     <div class="stream-badge">
       <div class="live-blink"></div>
-      LIVE · SRC ${sid}
+      LIVE · ${name}
     </div>
-    <img
-      id="live-stream-img"
-      src="${streamUrl}"
+    <img id="live-stream-img" src="${streamUrl}"
       style="width:100%;max-height:480px;object-fit:contain;border-radius:8px;background:#000"
-      onerror="streamError()"
-    >
+      onerror="streamError()">
   `;
 
   document.getElementById("stream-status").textContent = "LIVE";
   document.getElementById("stream-status").className = "sbadge sbadge-ok";
   streamActive = true;
-  log("Stream started for source " + sid, "ok");
+  log(`Stream started: ${name} (#${sid})`, "ok");
+}
+
+function backToCameraPicker() {
+  stopStream();
+  document.getElementById("stream-camera-picker").style.display = "block";
+  document.getElementById("stream-active-view").style.display = "none";
+  loadStreamCameras();
 }
 
 function stopStream() {
-  const box = document.getElementById("stream-box");
-  // Clear the img src to stop fetching MJPEG frames
   const img = document.getElementById("live-stream-img");
   if (img) img.src = "";
+  const box = document.getElementById("stream-box");
   box.innerHTML = `<div class="stream-placeholder"><div class="icon">📷</div><div>Stream stopped</div></div>`;
   document.getElementById("stream-status").textContent = "STOPPED";
   document.getElementById("stream-status").className = "sbadge sbadge-warn";
@@ -863,7 +925,6 @@ function streamError() {
 async function grabSnapshot() {
   const sid = document.getElementById("stream-src-id").value;
   if (!sid || !TOKEN) return;
-  // Fetch the snapshot with auth and trigger download
   try {
     const res = await fetch(`${api()}/source/frame-preview/${sid}`, { headers: headers() });
     if (!res.ok) throw new Error("Failed to fetch snapshot");
@@ -876,14 +937,6 @@ async function grabSnapshot() {
   } catch(e) {
     toast("Snapshot failed: " + e.message, "err");
   }
-}
-
-async function loadPreviewFrame() {
-  const sid = document.getElementById("preview-src-id").value;
-  if (!sid) return;
-  const url = `${api()}/source/frame-preview/${sid}?_=${Date.now()}`;
-  document.getElementById("preview-result").innerHTML =
-    `<img src="${url}" style="max-width:100%;border-radius:8px;border:1px solid var(--border)" onerror="this.replaceWith(document.createTextNode('Failed to load preview'))">`;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1173,14 +1226,17 @@ async function registerFace() {
   const fd = new FormData();
   fd.append("name", name); fd.append("image", file);
 
-  document.getElementById("face-reg-result").innerHTML = '<span style="color:var(--muted);font-size:.75rem">Registering…</span>';
+  const regBtn = document.querySelector('[onclick="registerFace()"]');
+  if (regBtn) { regBtn.disabled = true; regBtn.textContent = "⏳ Processing…"; }
+  document.getElementById("face-reg-result").innerHTML = '<span style="color:var(--muted);font-size:.75rem">Uploading &amp; computing face embedding… (this may take 30-60s on first run)</span>';
 
   try {
     const r = await fetch(`${api()}/face/register`, {
       method: "POST", headers: { "Authorization": `Bearer ${TOKEN}` }, body: fd
     });
     if (!r.ok) {
-      const msg = await r.text();
+      let msg;
+      try { const j = await r.json(); msg = j.detail || JSON.stringify(j); } catch(_) { msg = await r.text(); }
       document.getElementById("face-reg-result").innerHTML = `<span class="sbadge sbadge-error">${msg}</span>`;
       toast("Registration failed", "err"); return;
     }
@@ -1192,7 +1248,10 @@ async function registerFace() {
     toast(`${face.name} registered ✓`, "ok");
     loadFaces();
   } catch(e) {
+    document.getElementById("face-reg-result").innerHTML = `<span class="sbadge sbadge-error">Error: ${e.message}</span>`;
     toast("Error: " + e.message, "err");
+  } finally {
+    if (regBtn) { regBtn.disabled = false; regBtn.textContent = "➕ Register"; }
   }
 }
 

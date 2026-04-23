@@ -11,7 +11,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import aiosqlite
 import cv2
@@ -31,6 +31,11 @@ _active: Dict[int, bool] = {}
 # Per-track dedup: (source_id, track_id, alert_type) -> last_alert_ts
 _ALERT_DEDUP_SECONDS = 5.0
 _last_alerts: Dict[tuple, float] = {}
+
+# Per-track face classification cache: (source_id, track_id) -> (is_unknown, timestamp)
+_FACE_CACHE_TTL = 5.0   # seconds to cache face classification per track
+_face_cache: Dict[Tuple[int, int], Tuple[bool, float]] = {}
+_MIN_FACE_CROP_PX = 40  # minimum width/height for face recognition
 
 
 def set_event_loop(loop: asyncio.AbstractEventLoop) -> None:
@@ -111,18 +116,48 @@ async def _process(result: PipelineResult, db_path: str) -> None:
                     if loit:
                         loitering = True
 
-            # Face classification (run in thread pool so DeepFace embedding doesn't block the event loop)
+            # Face classification with per-track caching
             x1, y1, x2, y2 = det.bbox
-            face_crop = result.frame[max(0, y1):y2, max(0, x1):x2]
+            crop_w, crop_h = x2 - x1, y2 - y1
             is_unknown = True
-            if face_crop.size > 0:
-                loop = asyncio.get_event_loop()
-                classifications = await loop.run_in_executor(
-                    None, face_engine.classify_faces_in_frame, result.frame, [det.bbox]
-                )
-                if classifications:
-                    _, is_known = classifications[0]
-                    is_unknown = not is_known
+
+            # Check cache first (avoid re-running face engine on same track)
+            cache_key = (result.source_id, det.track_id) if det.track_id is not None else None
+            now = time.time()
+            if cache_key and cache_key in _face_cache:
+                cached_unknown, cached_ts = _face_cache[cache_key]
+                if now - cached_ts < _FACE_CACHE_TTL:
+                    is_unknown = cached_unknown
+                    if not is_unknown:
+                        continue  # Known face — skip
+                else:
+                    del _face_cache[cache_key]
+
+            # Only run face recognition if crop is large enough
+            if crop_w >= _MIN_FACE_CROP_PX and crop_h >= _MIN_FACE_CROP_PX:
+                face_crop = result.frame[max(0, y1):y2, max(0, x1):x2]
+                if face_crop.size > 0:
+                    t0 = time.perf_counter()
+                    loop = asyncio.get_event_loop()
+                    classifications = await loop.run_in_executor(
+                        None, face_engine.classify_faces_in_frame, result.frame, [det.bbox]
+                    )
+                    face_ms = (time.perf_counter() - t0) * 1000
+                    if classifications:
+                        _, is_known = classifications[0]
+                        is_unknown = not is_known
+
+                    # Cache result for this track
+                    if cache_key:
+                        _face_cache[cache_key] = (is_unknown, now)
+
+                    # Log timing periodically
+                    if det.track_id and det.track_id % 5 == 0:
+                        logger.info("Face engine: %.1fms, is_unknown=%s", face_ms, is_unknown)
+
+            # Known faces have access — skip alerting entirely
+            if not is_unknown:
+                continue
 
             # Score
             score = scoring.compute_score(

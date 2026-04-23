@@ -4,7 +4,11 @@ POST   /face/register
 GET    /face/list
 DELETE /face/{id}
 """
+import asyncio
+import logging
+import re
 import shutil
+import uuid
 from pathlib import Path
 
 import aiosqlite
@@ -18,6 +22,7 @@ from app.services import face_engine
 
 router = APIRouter(prefix="/face", tags=["faces"])
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 @router.post("/register", response_model=FaceOut)
@@ -30,10 +35,18 @@ async def register_face(
     if not image.filename.lower().endswith((".jpg", ".jpeg", ".png")):
         raise HTTPException(status_code=400, detail="Image must be JPG or PNG")
 
-    # Save image to faces storage
-    dest = settings.faces_dir / image.filename
-    with dest.open("wb") as f:
-        shutil.copyfileobj(image.file, f)
+    # Sanitize filename: remove spaces, special chars, add unique prefix
+    safe_name = re.sub(r'[^\w.\-]', '_', image.filename)
+    safe_name = f"{uuid.uuid4().hex[:8]}_{safe_name}"
+    dest = settings.faces_dir / safe_name
+    logger.info("Saving face image to: %s", dest)
+
+    try:
+        with dest.open("wb") as f:
+            shutil.copyfileobj(image.file, f)
+    except Exception as exc:
+        logger.error("Failed to save face image: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Failed to save image: {exc}")
 
     # Insert row first to get ID
     async with db.execute(
@@ -42,9 +55,19 @@ async def register_face(
     ) as cur:
         face_id = cur.lastrowid
     await db.commit()
+    logger.info("Face row inserted: id=%d name=%s", face_id, name)
 
-    # Compute embedding
-    blob = face_engine.register_face(face_id, name, str(dest))
+    # Compute embedding (may take a moment on first run as models are downloaded)
+    # Run in thread to avoid blocking the async event loop
+    try:
+        blob = await asyncio.to_thread(face_engine.register_face, face_id, name, str(dest))
+    except Exception as exc:
+        logger.error("Face embedding failed: %s", exc)
+        await db.execute("DELETE FROM known_faces WHERE id=?", (face_id,))
+        await db.commit()
+        dest.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"Face embedding failed: {exc}")
+
     if blob is None:
         # Remove DB row and file if no face found
         await db.execute("DELETE FROM known_faces WHERE id=?", (face_id,))
@@ -57,6 +80,7 @@ async def register_face(
         "UPDATE known_faces SET embedding=? WHERE id=?", (blob, face_id)
     )
     await db.commit()
+    logger.info("Face registered successfully: id=%d name=%s", face_id, name)
 
     async with db.execute("SELECT * FROM known_faces WHERE id=?", (face_id,)) as cur:
         row = dict(await cur.fetchone())
