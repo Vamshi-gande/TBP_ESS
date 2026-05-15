@@ -18,7 +18,9 @@ import cv2
 import numpy as np
 
 from app.core.config import get_settings
-from app.services.ai_pipeline import PipelineResult, Detection, start_detection, stop_detection
+from app.services.ai_pipeline import (
+    PipelineResult, Detection, draw_detections, start_detection, stop_detection,
+)
 from app.services import face_engine, loitering_engine, scoring
 from app.services.notification import dispatch_alert
 
@@ -35,7 +37,6 @@ _last_alerts: Dict[tuple, float] = {}
 # Per-track face classification cache: (source_id, track_id) -> (is_unknown, timestamp)
 _FACE_CACHE_TTL = 5.0   # seconds to cache face classification per track
 _face_cache: Dict[Tuple[int, int], Tuple[bool, float]] = {}
-_MIN_FACE_CROP_PX = 40  # minimum width/height for face recognition
 
 
 def set_event_loop(loop: asyncio.AbstractEventLoop) -> None:
@@ -45,10 +46,15 @@ def set_event_loop(loop: asyncio.AbstractEventLoop) -> None:
 
 # ── Helpers ───────────────────────────────────────────────────────────────
 
-def _save_snapshot(frame: np.ndarray, source_id: int) -> Optional[str]:
+def _save_snapshot(
+    frame: np.ndarray,
+    source_id: int,
+    detections: Optional[List[Detection]] = None,
+) -> Optional[str]:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     path = settings.snapshots_dir / f"src{source_id}_{ts}.jpg"
-    ok = cv2.imwrite(str(path), frame)
+    annotated = draw_detections(frame, detections) if detections else frame
+    ok = cv2.imwrite(str(path), annotated)
     if not ok:
         logger.warning("Failed to write snapshot to %s", path)
         return None
@@ -86,13 +92,11 @@ async def _process(result: PipelineResult, db_path: str) -> None:
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
 
-        # Load ROI zones for this source
         async with db.execute(
             "SELECT * FROM roi_zones WHERE source_id=?", (result.source_id,)
         ) as cur:
             rois = [dict(r) for r in await cur.fetchall()]
 
-        # Load settings
         async with db.execute("SELECT key, value FROM settings") as cur:
             cfg = {r["key"]: r["value"] for r in await cur.fetchall()}
 
@@ -101,65 +105,63 @@ async def _process(result: PipelineResult, db_path: str) -> None:
         score_app   = int(cfg.get("alert_score_app",   2))
         score_wa    = int(cfg.get("alert_score_whatsapp", 3))
 
-        for det in result.detections:
-            cx, cy = _centroid(det.bbox)
+        # ── Face classification: one batched call per frame ──────────────
+        # We resolve which detections are missing a fresh cache hit and
+        # classify all of those bboxes together. Big win for multi-person.
+        now = time.time()
+        to_classify_idx: List[int] = []
+        to_classify_bboxes: List[Tuple[int, int, int, int]] = []
+        is_unknown_per_det: List[bool] = [True] * len(result.detections)
 
-            # Determine ROI membership
-            matched_rois = [r for r in rois if loitering_engine.point_in_roi(cx, cy, r)]
-            in_danger    = any(r["zone_type"] in ("red", "critical") for r in matched_rois)
-
-            # Loitering
-            loitering = False
-            for roi in matched_rois:
-                if det.track_id is not None:
-                    loit = loitering_engine.update(result.source_id, det.track_id, roi["id"])
-                    if loit:
-                        loitering = True
-
-            # Face classification with per-track caching
-            x1, y1, x2, y2 = det.bbox
-            crop_w, crop_h = x2 - x1, y2 - y1
-            is_unknown = True
-
-            # Check cache first (avoid re-running face engine on same track)
+        for i, det in enumerate(result.detections):
             cache_key = (result.source_id, det.track_id) if det.track_id is not None else None
-            now = time.time()
             if cache_key and cache_key in _face_cache:
                 cached_unknown, cached_ts = _face_cache[cache_key]
                 if now - cached_ts < _FACE_CACHE_TTL:
-                    is_unknown = cached_unknown
-                    if not is_unknown:
-                        continue  # Known face — skip
-                else:
-                    del _face_cache[cache_key]
+                    is_unknown_per_det[i] = cached_unknown
+                    continue
+                del _face_cache[cache_key]
+            to_classify_idx.append(i)
+            to_classify_bboxes.append(det.bbox)
 
-            # Only run face recognition if crop is large enough
-            if crop_w >= _MIN_FACE_CROP_PX and crop_h >= _MIN_FACE_CROP_PX:
-                face_crop = result.frame[max(0, y1):y2, max(0, x1):x2]
-                if face_crop.size > 0:
-                    t0 = time.perf_counter()
-                    loop = asyncio.get_event_loop()
-                    classifications = await loop.run_in_executor(
-                        None, face_engine.classify_faces_in_frame, result.frame, [det.bbox]
-                    )
-                    face_ms = (time.perf_counter() - t0) * 1000
-                    if classifications:
-                        _, is_known = classifications[0]
-                        is_unknown = not is_known
+        if to_classify_bboxes:
+            t0 = time.perf_counter()
+            loop = asyncio.get_running_loop()
+            classifications = await loop.run_in_executor(
+                None, face_engine.classify_faces_in_frame,
+                result.frame, to_classify_bboxes,
+            )
+            face_ms = (time.perf_counter() - t0) * 1000
+            for slot, (_, is_known) in zip(to_classify_idx, classifications):
+                is_unknown_per_det[slot] = not is_known
+                det = result.detections[slot]
+                cache_key = (result.source_id, det.track_id) if det.track_id is not None else None
+                if cache_key:
+                    _face_cache[cache_key] = (is_unknown_per_det[slot], now)
+            logger.debug(
+                "Face engine: %d bboxes in %.1fms (%.1fms each)",
+                len(to_classify_bboxes), face_ms,
+                face_ms / max(1, len(to_classify_bboxes)),
+            )
 
-                    # Cache result for this track
-                    if cache_key:
-                        _face_cache[cache_key] = (is_unknown, now)
+        # ── Per-detection scoring + alerting ─────────────────────────────
+        for i, det in enumerate(result.detections):
+            is_unknown = is_unknown_per_det[i]
+            cx, cy = _centroid(det.bbox)
 
-                    # Log timing periodically
-                    if det.track_id and det.track_id % 5 == 0:
-                        logger.info("Face engine: %.1fms, is_unknown=%s", face_ms, is_unknown)
+            matched_rois = [r for r in rois if loitering_engine.point_in_roi(cx, cy, r)]
+            in_danger    = any(r["zone_type"] in ("red", "critical") for r in matched_rois)
 
-            # Known faces have access — skip alerting entirely
+            loitering = False
+            for roi in matched_rois:
+                if det.track_id is not None:
+                    if loitering_engine.update(result.source_id, det.track_id, roi["id"]):
+                        loitering = True
+
             if not is_unknown:
+                # Known face — let them through, nothing to alert on.
                 continue
 
-            # Score
             score = scoring.compute_score(
                 is_unknown=is_unknown,
                 in_danger_zone=in_danger,
@@ -167,24 +169,18 @@ async def _process(result: PipelineResult, db_path: str) -> None:
                 night_start=night_start,
                 night_end=night_end,
             )
-
             if score == 0:
-                continue  # nothing notable
+                continue
 
-            # Dedup identical alerts for same track within a short window so
-            # the alert feed stays readable during demo.
-            alert_type_tmp = "loitering" if loitering else ("unknown_face" if is_unknown else "detection")
-            dedup_key = (result.source_id, det.track_id, alert_type_tmp)
+            alert_type = "loitering" if loitering else "unknown_face"
+            dedup_key = (result.source_id, det.track_id, alert_type)
             now_ts = time.time()
-            last_ts = _last_alerts.get(dedup_key, 0.0)
-            if now_ts - last_ts < _ALERT_DEDUP_SECONDS:
+            if now_ts - _last_alerts.get(dedup_key, 0.0) < _ALERT_DEDUP_SECONDS:
                 continue
             _last_alerts[dedup_key] = now_ts
 
-            # Save snapshot
-            snapshot = _save_snapshot(result.frame, result.source_id)
+            snapshot = _save_snapshot(result.frame, result.source_id, result.detections)
 
-            # Persist alert
             meta = json.dumps({
                 "track_id": det.track_id,
                 "confidence": det.confidence,
@@ -193,7 +189,6 @@ async def _process(result: PipelineResult, db_path: str) -> None:
                 "in_danger_zone": in_danger,
                 "matched_rois": [r["name"] for r in matched_rois],
             })
-            alert_type = alert_type_tmp
 
             async with db.execute(
                 """INSERT INTO alerts
@@ -204,7 +199,6 @@ async def _process(result: PipelineResult, db_path: str) -> None:
                 alert_id = cur.lastrowid
             await db.commit()
 
-            # Dispatch notifications
             msg = (
                 f"[Score {score}] {alert_type.upper()} on source {result.source_id}. "
                 f"{'Loitering detected. ' if loitering else ''}"

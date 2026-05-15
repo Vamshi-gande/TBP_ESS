@@ -64,6 +64,12 @@ def _send_twilio_sync(message: str, media_url: Optional[str] = None) -> None:
 
     client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
 
+    # Twilio needs a publicly reachable HTTPS URL — local file paths cause
+    # the API call to fail outright. Drop them so the text alert still goes.
+    public_media: Optional[str] = None
+    if media_url and (media_url.startswith("http://") or media_url.startswith("https://")):
+        public_media = media_url
+
     # Try WhatsApp first
     try:
         kwargs = {
@@ -71,8 +77,8 @@ def _send_twilio_sync(message: str, media_url: Optional[str] = None) -> None:
             "from_": settings.TWILIO_FROM_WHATSAPP,
             "to": settings.ALERT_PHONE_WHATSAPP,
         }
-        if media_url:
-            kwargs["media_url"] = [media_url]
+        if public_media:
+            kwargs["media_url"] = [public_media]
         client.messages.create(**kwargs)
         logger.info("WhatsApp alert sent")
         return

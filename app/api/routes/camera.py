@@ -195,5 +195,20 @@ async def delete_source(
 ):
     surveillance_orchestrator.deactivate_source(source_id)
     camera_gateway.disconnect_source(source_id)
+    # Mark inactive *before* delete so a crash in the cascade doesn't
+    # leave the source eligible for auto-resume on next startup.
+    await db.execute("UPDATE sources SET is_active=0 WHERE id=?", (source_id,))
     await db.execute("DELETE FROM sources WHERE id=?", (source_id,))
+    await db.commit()
+
+
+@router.post("/sources/{source_id}/deactivate", status_code=204)
+async def deactivate_source(
+    source_id: int,
+    db: aiosqlite.Connection = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    surveillance_orchestrator.deactivate_source(source_id)
+    camera_gateway.disconnect_source(source_id)
+    await db.execute("UPDATE sources SET is_active=0 WHERE id=?", (source_id,))
     await db.commit()

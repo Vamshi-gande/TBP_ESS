@@ -102,7 +102,10 @@ class DetectionWorker:
         model = _get_model()
 
         frame_count = 0
-        skip_interval = 2          # Process every 2nd frame (was every frame)
+        # Run YOLO on every frame. Reusing stale bboxes against the *new*
+        # frame caused face crops to land on empty pixels and silently
+        # misclassify people; not worth the saved milliseconds.
+        skip_interval = 1
         last_detections: List[Detection] = []
 
         while self._running:

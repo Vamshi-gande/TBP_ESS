@@ -46,14 +46,24 @@ async def lifespan(app: FastAPI):
     loop = asyncio.get_event_loop()
     surveillance_orchestrator.set_event_loop(loop)
 
-    # Load known faces into memory
+    # Load known faces into memory. If any blob's dim doesn't match the
+    # current model (e.g. after a model swap), face_engine re-encodes from
+    # the original image_path and hands back the new blobs to persist.
     async with aiosqlite.connect("surveillance.db") as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT id, name, embedding FROM known_faces"
+            "SELECT id, name, image_path, embedding FROM known_faces"
         ) as cur:
             rows = [dict(r) for r in await cur.fetchall()]
-    face_engine.load_known_faces_from_db(rows)
+        rewrites = face_engine.load_known_faces_from_db(rows)
+        for face_id, blob in rewrites:
+            await db.execute(
+                "UPDATE known_faces SET embedding=? WHERE id=?",
+                (blob, face_id),
+            )
+        if rewrites:
+            await db.commit()
+            logger.info("Persisted %d re-encoded face embeddings", len(rewrites))
 
     # Load loitering threshold from settings
     async with aiosqlite.connect("surveillance.db") as db:
